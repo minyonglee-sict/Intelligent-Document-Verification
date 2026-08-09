@@ -1,0 +1,6 @@
+streamlit>=1.40
+docling>=2.0
+ollama>=0.4
+pydantic>=2.0
+pandas>=2.0
+pyodbc>=5.0

@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+
+# 업로드 원본과 SQLite DB는 런타임 산출물이다
+data/
