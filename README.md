@@ -1,7 +1,8 @@
 # Intelligent Document Verification
 
-PDF 송장을 업로드하면 **Docling**으로 텍스트를 추출하고, **Ollama**로 검증한 뒤
-**SQLite**에 저장하고, 오류 건만 골라 사람이 검수·승인하는 파이프라인입니다.
+PDF 송장을 업로드하면 **Docling**으로 텍스트를 추출하고, 표는 파서가 직접 읽고,
+머리말은 **Ollama**로 뽑아낸 뒤, 규칙 엔진과 근거 대조로 검증해 **MS SQL Server**에
+저장하고, 오류 건만 골라 사람이 검수·승인하는 파이프라인입니다.
 
 ```
 Streamlit 업로드(다건 드래그앤드롭)
@@ -9,8 +10,8 @@ Streamlit 업로드(다건 드래그앤드롭)
 Docling   → Markdown + Docling JSON
       ↓
 표 파서   → 품목 (Markdown 표를 직접 읽음, 즉시·정확)   ┐
-Ollama    → 머리말 추출 1콜 + 검증 1콜                  ├→ is_valid, errors[]
-규칙 엔진 → 합계/날짜/필수값 결정적 검사                ┘
+Ollama    → 머리말 추출 1콜 + 빈 필드 재확인 1콜(조건부) ├→ is_valid, errors[]
+규칙 엔진 → 산술/날짜/필수값 + 근거 대조 (결정적)        ┘
       ↓
 MS-SQL    → documents + line_items + validation_errors
       ↓
@@ -40,8 +41,8 @@ WHERE status = 'VALIDATED' GROUP BY vendor_name;
 `RuntimeError`가 납니다. 필드를 추가하고 컬럼 추가를 잊어 값이 조용히 저장되지
 않는 사고를 막기 위한 것입니다.
 
-예전 `fields_json` 한 덩어리로 저장하던 DB는 `db._migrate()`가 앱 시작 시 자동으로
-컬럼 구조로 옮기고 그 컬럼을 지웁니다.
+예전 SQLite(`data/documents.db`)로 쓰던 데이터는
+[migrate_sqlite_to_mssql.py](migrate_sqlite_to_mssql.py)로 한 번 옮기면 됩니다.
 
 역할 분담이 핵심입니다. **기계가 확실히 할 수 있는 일은 기계에게, 판단이 필요한
 것만 LLM에게** 맡깁니다.
@@ -51,8 +52,9 @@ WHERE status = 'VALIDATED' GROUP BY vendor_name;
 | Docling | 픽셀 → 구조 (표·문단 인식) | 표 복원은 전용 모델이 낫다 |
 | 표 파서 | 복원된 표 → 품목 데이터 | 이미 구조화된 걸 LLM에 다시 받아쓰게 할 이유가 없다 |
 | LLM 추출 | 자유 서식 머리말 → 필드 | 문서마다 자리·이름이 달라 규칙으로 못 잡는다 |
-| LLM 검증 | 원문 ↔ 추출값 대조 | 규칙이 못 보는 "원문엔 있는데 빠졌다"를 잡는다 |
 | 규칙 엔진 | 산술·날짜·필수값 | 결정적이어야 하는 판단 |
+| 근거 대조 | 추출값이 원문에 실제로 있는지 | 환각을 결정적으로 차단 |
+| LLM 재확인 | 비어 있는 필드만 되묻기 | 규칙이 못 보는 "원문엔 있는데 빠졌다"를 잡는다 |
 
 ## 실행
 
@@ -62,21 +64,30 @@ streamlit run main.py
 
 ### 최초 1회 세팅 (새 PC일 때만)
 
-이미 세팅된 환경이면 건너뛰세요. 사이드바의 **Ollama 연결 확인** 버튼으로 3·4번이
-끝났는지 바로 확인할 수 있습니다.
+이미 세팅된 환경이면 건너뛰세요. 사이드바의 **Ollama 연결 확인** / **DB 연결 확인**
+버튼으로 준비가 끝났는지 바로 볼 수 있습니다.
 
 ```powershell
 pip install -r requirements.txt   # 1. 패키지 (docling이 torch를 함께 받아 용량이 큽니다)
-ollama --version                  # 2. Ollama 설치 확인
-ollama serve                      # 3. 서버. Windows는 트레이의 'ollama app'이 이미 띄워둡니다
-ollama pull qwen2.5:7b            # 4. 모델. `ollama list`에 있으면 불필요
+ollama serve                      # 2. Ollama 서버. Windows는 트레이 앱이 이미 띄워둡니다
+ollama pull qwen2.5:7b            # 3. 모델. `ollama list`에 있으면 불필요
 ```
+
+DB 쪽은 세 가지가 필요합니다.
+
+- **SQL Server** (Express 판으로 충분) — 인스턴스가 `localhost\SQLEXPRESS` 가 아니면
+  `MSSQL_SERVER` 로 지정
+- **ODBC Driver 18 for SQL Server** — `Get-OdbcDriver -Name "*SQL Server*"` 로 확인
+- **명명 인스턴스를 쓴다면 SQL Server Browser 서비스** — 동적 포트를 해석하는 데 필요.
+  꺼져 있으면 `Set-Service SQLBrowser -StartupType Automatic; Start-Service SQLBrowser`
+
+데이터베이스 자체는 앱 시작 시 `db.init_db()` 가 없으면 만들어 줍니다.
 
 UI 없이 배치로 돌리려면:
 
 ```powershell
-python run_pipeline.py invoice-0-2.pdf invoice-0-3.pdf
-python run_pipeline.py *.pdf --force     # 중복 해시도 다시 처리
+python run_pipeline.py 송장.pdf
+python run_pipeline.py data\uploads\*.pdf --force   # 중복 해시도 다시 처리
 ```
 
 ## 구조
@@ -88,14 +99,15 @@ python run_pipeline.py *.pdf --force     # 중복 해시도 다시 처리
 | [app/schemas.py](app/schemas.py) | Pydantic 모델 (추출 필드, 검증 결과) |
 | [app/extractor.py](app/extractor.py) | Docling PDF → Markdown / JSON |
 | [app/table_parser.py](app/table_parser.py) | Markdown 표 → 품목 (LLM 없이) |
-| [app/validator.py](app/validator.py) | Ollama 추출·검증 + 규칙 검증 |
+| [app/validator.py](app/validator.py) | Ollama 머리말 추출 + 규칙·근거 대조·빈 필드 재확인 |
 | [app/db.py](app/db.py) | MS-SQL 스키마와 CRUD (pyodbc) |
-| [migrate_sqlite_to_mssql.py](migrate_sqlite_to_mssql.py) | 예전 SQLite 데이터 이관 (1회용) |
 | [app/pipeline.py](app/pipeline.py) | 업로드→추출→검증→저장 오케스트레이션 |
 | [app/ui_upload.py](app/ui_upload.py) | 업로드 화면 |
-| [app/ui_review.py](app/ui_review.py) | 검수 화면 (ERROR 건만) |
+| [app/ui_review.py](app/ui_review.py) | 검수 화면 (ERROR 수정 + PENDING 승인) |
 | [app/ui_documents.py](app/ui_documents.py) | 전체 문서 조회 |
 | [run_pipeline.py](run_pipeline.py) | CLI 배치 실행 |
+| [migrate_sqlite_to_mssql.py](migrate_sqlite_to_mssql.py) | 예전 SQLite 데이터 이관 (1회용) |
+| [queries.sql](queries.sql) | DBeaver/SSMS용 조회 쿼리 모음 |
 
 ## 상태 흐름
 
@@ -113,9 +125,9 @@ python run_pipeline.py *.pdf --force     # 중복 해시도 다시 처리
 재검증 버튼은 필드와 오류 로그만 갱신하며 상태를 바꾸지 않습니다. 바꾸면 고치던
 문서가 목록에서 사라져 승인할 수 없게 되기 때문입니다.
 
-## 검증 두 갈래
+## 검증 세 갈래
 
-검증은 세 갈래이고, **둘은 결정적**입니다.
+**둘은 결정적**이고, LLM이 관여하는 건 하나뿐입니다.
 
 **1. 규칙 엔진** (`validator.rule_check`, source=`rule`) — 필수값 누락, 날짜 파싱·순서,
 `수량 × 단가 = 금액`, `품목 합계 = 공급가액`, `공급가액 + 세액 + 배송비 = 총액`, 음수 금액.
@@ -159,7 +171,10 @@ python run_pipeline.py *.pdf --force     # 중복 해시도 다시 처리
 | `OLLAMA_TIMEOUT` | `900` | 1콜당 타임아웃(초) |
 | `MAX_DOC_CHARS` | `24000` | LLM에 넘길 최대 문자 수 |
 | `OLLAMA_NUM_CTX` | `8192` | 컨텍스트 길이 |
-| `NUM_PREDICT_ITEMS` | `3072` | 품목 추출 생성 토큰 상한 |
+| `NUM_PREDICT_HEADER` | `512` | 머리말 추출 생성 토큰 상한 |
+| `NUM_PREDICT_ITEMS` | `3072` | 품목 추출(LLM 폴백) 생성 토큰 상한 |
+| `NUM_PREDICT_VALIDATE` | `1024` | 빈 필드 재확인 생성 토큰 상한 |
+| `STALE_PROCESSING_MINUTES` | `90` | 이 시간을 넘긴 `PROCESSING` 행은 `FAILED`로 정리 |
 | `DOCLING_OCR` | `0` | 스캔 PDF면 `1` (느려짐) |
 | `DOCLING_COMPILE` | `0` | `torch.compile` 사용 여부 |
 
@@ -226,8 +241,8 @@ Docling이 이미 표를 복원해 둔 마당에 그걸 다시 받아쓰게 한 
 스크립트를 멈추지 못하고 **새 스크립트가 나란히 돌아갑니다.**
 
 그래서 두 겹으로 막습니다.
-- `reserve_document()`가 `BEGIN IMMEDIATE` 트랜잭션 안에서 조회와 삽입을 함께
-  처리해 `PROCESSING` 행으로 해시를 선점합니다. 세션이나 탭이 달라도 막힙니다.
+- `reserve_document()`가 한 트랜잭션 안에서 조회(`WITH (UPDLOCK, HOLDLOCK)`)와 삽입을
+  함께 처리해 `PROCESSING` 행으로 해시를 선점합니다. 세션이나 탭이 달라도 막힙니다.
 - `ui_upload`의 `pipeline_busy` 플래그가 같은 세션의 재진입을 막습니다.
 
 앱이 처리 도중 죽으면 `PROCESSING` 행이 남아 재업로드를 영원히 막으므로,
@@ -240,7 +255,7 @@ torch inductor가 UTF-8 템플릿 파일을 시스템 인코딩으로 읽다가
 
 ## 성능
 
-이 저장소의 `invoice-0-2.pdf`(2페이지, 품목 20행)를 CPU + `qwen2.5:7b`로 돌린 실측:
+2페이지·품목 20행짜리 송장을 CPU + `qwen2.5:7b`로 돌린 실측:
 
 | 단계 | 하는 일 | 시간 |
 |---|---|---|
