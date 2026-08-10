@@ -206,6 +206,41 @@ def _build_item(cells: list[str], mapping: dict[str, int]) -> Optional[LineItem]
     )
 
 
+LEADING_NUMBER = re.compile(r"^(\d{1,4})\s+(?=\S)")
+
+
+def _strip_row_numbers(items: list[LineItem]) -> None:
+    """품목명 앞에 붙은 품목 번호를 떼어낸다.
+
+    Docling이 표를 좁게 복원하면 'Item #' 열과 품목명 열을 한 칸에 합쳐
+    '18 1-013 - Project Coordinator (26)' 처럼 만든다. 번호는 이미 position 으로
+    들고 있으므로 품목명에서는 지운다.
+
+    다만 '1-013' 이나 '10-700' 처럼 숫자로 시작하는 진짜 품목코드를 잘라내면 안
+    되므로, 그 숫자가 번호라는 근거가 있을 때만 지운다.
+      - 표의 대부분(60% 이상) 행이 앞 숫자를 갖고 그 값이 오름차순이거나
+      - 그 숫자가 표 안에서의 행 순번과 일치할 때
+    """
+    leading: list[Optional[int]] = []
+    for item in items:
+        match = LEADING_NUMBER.match(item.description)
+        leading.append(int(match.group(1)) if match else None)
+
+    present = [n for n in leading if n is not None]
+    ascending = len(present) >= max(2, int(len(items) * 0.6)) and all(
+        a < b for a, b in zip(present, present[1:])
+    )
+
+    for idx, (item, number) in enumerate(zip(items, leading), start=1):
+        if number is None:
+            continue
+        if not ascending and number != idx:
+            continue  # 번호라는 근거가 없다. 품목코드일 수 있으므로 둔다
+        stripped = LEADING_NUMBER.sub("", item.description, count=1).strip()
+        if stripped:
+            item.description = stripped
+
+
 def _score_mapping(rows: list[list[str]], mapping: dict[str, int]) -> tuple[float, int]:
     """이 매핑으로 읽었을 때 '수량 x 단가 = 금액' 이 맞는 행의 비율과 검산 가능 행 수.
 
@@ -311,11 +346,17 @@ def parse_line_items(markdown: str) -> list[LineItem]:
         else:
             continue
 
+        # 표 조각 단위로 모은다. 앞 숫자가 품목 번호인지 판단하려면 그 조각의
+        # 행들을 함께 봐야 하기 때문이다.
+        fragment: list[LineItem] = []
         for cells in data_rows:
             if SUMMARY_ROW.search(" ".join(cells)):
                 continue
             item = _build_item(cells, mapping)
             if item is not None:
-                items.append(item)
+                fragment.append(item)
+
+        _strip_row_numbers(fragment)
+        items += fragment
 
     return items
