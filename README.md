@@ -1,13 +1,18 @@
 # Intelligent Document Verification
 
-PDF 송장을 업로드하면 **Docling**으로 텍스트를 추출하고, 표는 파서가 직접 읽고,
+송장·영수증을 업로드하면 **Docling**으로 텍스트를 추출하고, 표는 파서가 직접 읽고,
 머리말은 **Ollama**로 뽑아낸 뒤, 규칙 엔진과 근거 대조로 검증해 **MS SQL Server**에
 저장하고, 오류 건만 골라 사람이 검수·승인하는 파이프라인입니다.
 
+PDF뿐 아니라 **Word·PowerPoint·Excel·HTML·이미지**도 받습니다 (`config.UPLOAD_EXTENSIONS`).
+Docling이 형식별로 읽어 같은 Markdown으로 만들어 주므로, 그 뒤 과정은 형식과
+무관하게 동일합니다. 이미지는 텍스트 레이어가 없어 OCR이 자동으로 켜집니다.
+
 ```
 Streamlit 업로드(다건 드래그앤드롭)
+   PDF / DOCX / PPTX / XLSX / HTML / 이미지
       ↓
-Docling   → Markdown + Docling JSON
+Docling   → Markdown + Docling JSON  (형식이 달라도 여기서 하나로 합쳐진다)
       ↓
 표 파서   → 품목 (Markdown 표를 직접 읽음, 즉시·정확)   ┐
 Ollama    → 머리말 추출 1콜 + 빈 필드 재확인 1콜(조건부) ├→ is_valid, errors[]

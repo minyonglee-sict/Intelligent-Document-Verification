@@ -11,8 +11,9 @@ from .ui_common import status_badge
 def render() -> None:
     st.subheader("문서 업로드")
     st.caption(
-        "PDF 파일을 아래 영역에 드래그앤드롭하세요. "
-        "Docling으로 텍스트를 추출하고 Ollama로 검증한 뒤 MS-SQL에 저장합니다."
+        "송장·영수증 파일을 아래 영역에 드래그앤드롭하세요. "
+        "Docling으로 텍스트를 추출하고 Ollama로 검증한 뒤 MS-SQL에 저장합니다. "
+        "PDF 외에 Word·PowerPoint·Excel·이미지도 읽습니다."
     )
 
     # file_uploader는 session_state로 비울 수 없다. key를 바꿔 새 위젯으로 갈아끼우는
@@ -20,8 +21,8 @@ def render() -> None:
     round_no = st.session_state.setdefault("upload_round", 0)
 
     uploaded = st.file_uploader(
-        "PDF 파일 (다중 선택 가능)",
-        type=["pdf"],
+        "문서 파일 (다중 선택 가능)",
+        type=config.UPLOAD_EXTENSIONS,
         accept_multiple_files=True,
         key=f"uploader_{round_no}",
     )

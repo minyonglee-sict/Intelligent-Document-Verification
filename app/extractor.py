@@ -32,9 +32,18 @@ def get_converter():
     pipeline_options.do_table_structure = True
     pipeline_options.table_structure_options.do_cell_matching = True
 
+    # 이미지는 텍스트 레이어가 없으므로 OCR이 반드시 필요하다.
+    image_options = PdfPipelineOptions()
+    image_options.do_ocr = True
+    image_options.do_table_structure = True
+    image_options.table_structure_options.do_cell_matching = True
+
+    # format_options 는 PDF/이미지 파이프라인만 손본다. Word·PowerPoint·Excel 등은
+    # Docling 기본 처리로 충분하고, allowed_formats 를 지정하지 않으므로 모두 열려 있다.
     return DocumentConverter(
         format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+            InputFormat.IMAGE: PdfFormatOption(pipeline_options=image_options),
         }
     )
 

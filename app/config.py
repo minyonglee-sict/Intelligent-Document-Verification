@@ -45,6 +45,20 @@ OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "900"))
 # LLM에 넘길 마크다운 최대 길이(문자). 초과 시 앞/뒤를 남기고 중간을 잘라낸다.
 MAX_DOC_CHARS = int(os.getenv("MAX_DOC_CHARS", "24000"))
 
+# 업로드를 허용할 확장자. Docling이 읽을 수 있는 것 중, 송장·영수증이 실제로
+# 오갈 만한 형식만 열어 둔다. 음성·영상까지 열면 이 파이프라인과 무관한 파일이
+# 들어와 처리 시간만 낭비된다.
+UPLOAD_EXTENSIONS = [
+    "pdf",
+    "docx", "doc",
+    "pptx", "ppt",
+    "xlsx", "xls",
+    "html", "htm",
+    "md", "txt",
+    "csv",
+    "png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp",
+]
+
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
 
 # 호출별 생성 토큰 상한. 배열 스키마에서 모델이 멈추지 못하고 계속 찍어내는 것을 막는다.

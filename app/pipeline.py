@@ -31,11 +31,17 @@ def file_hash(data: bytes) -> str:
 
 
 def store_upload(filename: str, data: bytes) -> Path:
-    """업로드된 원본 PDF를 data/uploads 아래에 보관한다."""
+    """업로드된 원본 파일을 data/uploads 아래에 보관한다.
+
+    확장자를 원본 그대로 지켜야 한다. Docling은 확장자로 형식을 판별하므로
+    .pptx 를 .pdf 로 저장하면 읽지 못한다.
+    """
     config.ensure_dirs()
-    stem = _SAFE_NAME.sub("_", Path(filename).stem)[:80] or "document"
+    source = Path(filename)
+    stem = _SAFE_NAME.sub("_", source.stem)[:80] or "document"
+    suffix = source.suffix.lower() or ".pdf"
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    path = config.UPLOAD_DIR / f"{stamp}_{stem}.pdf"
+    path = config.UPLOAD_DIR / f"{stamp}_{stem}{suffix}"
     path.write_bytes(data)
     return path
 
