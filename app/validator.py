@@ -537,8 +537,26 @@ def rule_check(fields: InvoiceFields) -> list[ValidationIssue]:
 
     # 품목별 수량 x 단가
     for idx, item in enumerate(fields.line_items, start=1):
-        if item.quantity is None or item.unit_price is None or item.amount is None:
+        # 값이 빠진 행을 그냥 건너뛰면, 금액이 없는 품목이 합계에서 조용히 사라진다.
+        # 검산을 못 하는 것과 문제가 없는 것은 다르므로 반드시 알린다.
+        if item.amount is None:
+            add(
+                f"line_items[{idx}]",
+                f"{idx}번 품목 '{item.description[:40]}'의 금액이 비어 있습니다. "
+                f"품목 합계에서 빠지니 원문을 확인해 채우세요.",
+            )
             continue
+        if (item.quantity is None) != (item.unit_price is None):
+            missing = "수량" if item.quantity is None else "단가"
+            add(
+                f"line_items[{idx}]",
+                f"{idx}번 품목 '{item.description[:40]}'의 {missing}이(가) 비어 있어 "
+                f"금액({item.amount:,.2f})을 검산할 수 없습니다.",
+                "warning",
+            )
+            continue
+        if item.quantity is None or item.unit_price is None:
+            continue  # 둘 다 없는 양식(금액만 적는 표)은 검산 대상이 아니다
         expected = item.quantity * item.unit_price
         if abs(expected - item.amount) > tol:
             add(

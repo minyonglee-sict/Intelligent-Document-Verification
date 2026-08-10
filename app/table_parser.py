@@ -152,6 +152,16 @@ def _cell(cells: list[str], mapping: dict[str, int], field: str) -> Optional[str
     return cells[idx]
 
 
+def _embedded_quantities(description: str) -> list[float]:
+    """품목명 안에 섞인 수량 후보 ('(10)', 'Qty. 2', 'x 3')."""
+    out = []
+    for pattern in EMBEDDED_COUNT:
+        match = pattern.search(description)
+        if match:
+            out.append(float(match.group(1)))
+    return out
+
+
 def _build_item(cells: list[str], mapping: dict[str, int]) -> Optional[LineItem]:
     from .validator import to_number, to_text  # 순환 임포트를 피해 지연 임포트
 
@@ -163,14 +173,27 @@ def _build_item(cells: list[str], mapping: dict[str, int]) -> Optional[LineItem]
     if not description and amount is None:
         return None
 
-    # 수량 열이 없는 양식은 품목명 안에 수량이 섞여 있다 ('(10)', 'Qty. 2').
+    embedded = _embedded_quantities(description)
+
+    # Docling은 같은 표 안에서도 행마다 칸을 다르게 밀어 놓는 일이 있다. 금액 칸이
+    # 비었으면 매핑 밖의 숫자 칸을 살펴보되, 검산이 성립할 때만 받아들인다.
+    # (invoice-2-1 마지막 행: [품목명, 99.25, '', 2481.25] -> 25 x 99.25 = 2481.25)
+    if amount is None and unit_price and embedded:
+        used = set(mapping.values())
+        for idx, cell in enumerate(cells):
+            if idx in used:
+                continue
+            candidate = to_number(cell)
+            if candidate is None:
+                continue
+            if any(abs(q * unit_price - candidate) <= 0.02 for q in embedded):
+                amount = candidate
+                break
+
+    # 수량 열이 없는 양식은 품목명 안에 수량이 섞여 있다.
     # 추측이 되지 않도록, 수량 x 단가 = 금액 이 성립할 때만 받아들인다.
     if quantity is None and unit_price and amount is not None:
-        for pattern in EMBEDDED_COUNT:
-            match = pattern.search(description)
-            if not match:
-                continue
-            candidate = float(match.group(1))
+        for candidate in embedded:
             if abs(candidate * unit_price - amount) <= 0.02:
                 quantity = candidate
                 break
