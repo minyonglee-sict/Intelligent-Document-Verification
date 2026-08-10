@@ -241,9 +241,11 @@ def extract_fields(markdown: str) -> tuple[InvoiceFields, list[ValidationIssue]]
         total_amount=to_number(raw_header.total_amount),
     )
 
+    # 모델이 지어낸 값은 저장 전에 비운다. 근거가 없으면 값이 아니다.
+    header, issues = drop_ungrounded(header, markdown)
+
     # 표 파싱에는 토큰 한계가 없으므로 잘리지 않은 원문을 그대로 넘긴다.
     line_items, failure = _extract_line_items(markdown)
-    issues = []
     if failure:
         issues.append(
             ValidationIssue(
@@ -377,6 +379,41 @@ def _appears_in(haystack: str, value, kind: str) -> bool:
     else:
         candidates = [str(value)]
     return any(_normalize(c) in haystack for c in candidates if c)
+
+
+def drop_ungrounded(
+    fields: InvoiceFields, markdown: str
+) -> tuple[InvoiceFields, list[ValidationIssue]]:
+    """원문에서 확인되지 않는 추출값을 비운다.
+
+    모델은 프롬프트로 금지해도 가끔 값을 지어낸다(invoice-2-2 에서 원문에 없는
+    합계 12,387.69 를 만들어냈다). 지어낸 값을 저장해 두고 오류만 띄우면, 검수자가
+    그것을 지우는 일까지 해야 하고 승인 시 잘못된 값이 그대로 남을 위험이 있다.
+    근거가 없으면 애초에 비운 채로 둔다 -- 빈 값은 사람이 채우면 되지만, 그럴듯한
+    거짓값은 눈에 잘 띄지 않는다.
+
+    비웠다는 사실 자체는 반드시 알린다. 조용히 지우면 추출 실패와 구분되지 않는다.
+    """
+    haystack = _normalize(markdown)
+    issues: list[ValidationIssue] = []
+
+    for name, label, kind in GROUNDED_FIELDS:
+        value = getattr(fields, name)
+        if value in (None, "") or _appears_in(haystack, value, kind):
+            continue
+        setattr(fields, name, None)
+        issues.append(
+            ValidationIssue(
+                field=name,
+                message=(
+                    f"{label}으로 추출된 '{value}' 을(를) 원문에서 찾을 수 없어 "
+                    f"비웠습니다. 원문에 실제로 있다면 직접 채워 넣으세요."
+                ),
+                severity="warning",
+                source="rule",
+            )
+        )
+    return fields, issues
 
 
 def grounding_check(fields: InvoiceFields, markdown: str) -> list[ValidationIssue]:
