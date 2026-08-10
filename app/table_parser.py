@@ -183,6 +183,80 @@ def _build_item(cells: list[str], mapping: dict[str, int]) -> Optional[LineItem]
     )
 
 
+def _score_mapping(rows: list[list[str]], mapping: dict[str, int]) -> tuple[float, int]:
+    """이 매핑으로 읽었을 때 '수량 x 단가 = 금액' 이 맞는 행의 비율과 검산 가능 행 수.
+
+    헤더 이름을 믿을 수 없을 때 쓰는 심판이다. 송장의 산술은 문서가 스스로 증명하는
+    사실이라, 열 배정이 옳으면 대부분의 행에서 성립하고 틀리면 거의 성립하지 않는다.
+    """
+    checked = ok = 0
+    for cells in rows:
+        if SUMMARY_ROW.search(" ".join(cells)):
+            continue
+        item = _build_item(cells, mapping)
+        if item is None or None in (item.quantity, item.unit_price, item.amount):
+            continue
+        checked += 1
+        if abs(item.quantity * item.unit_price - item.amount) <= 0.02:
+            ok += 1
+    return (ok / checked if checked else 0.0), checked
+
+
+def _candidate_mappings(rows: list[list[str]]) -> list[dict[str, int]]:
+    """숫자 열 조합을 (단가, 금액)으로 놓아 본 후보들.
+
+    Docling이 표를 어긋나게 복원하면 헤더 이름이 실제 값과 한 칸씩 밀린다. 그때는
+    이름을 버리고 값의 산술로 판정해야 한다.
+    """
+    if not rows:
+        return []
+    width = max(len(r) for r in rows)
+    numeric, text_len = [], []
+    for idx in range(width):
+        cells = [r[idx] for r in rows if idx < len(r)]
+        if not cells:
+            numeric.append(False)
+            text_len.append(0.0)
+            continue
+        numeric.append(sum(_is_number(c) for c in cells) / len(cells) >= 0.8)
+        others = [c for c in cells if not _is_number(c)]
+        text_len.append(sum(len(c) for c in others) / len(cells))
+
+    numeric_cols = [i for i, n in enumerate(numeric) if n]
+    text_cols = [i for i in range(width) if not numeric[i] and text_len[i] >= 3]
+    if len(numeric_cols) < 2 or not text_cols:
+        return []
+    description = max(text_cols, key=lambda i: text_len[i])
+
+    candidates = []
+    for unit_price in numeric_cols:
+        for amount in numeric_cols:
+            if unit_price == amount:
+                continue
+            base = {"description": description, "unit_price": unit_price, "amount": amount}
+            candidates.append(base)
+            for quantity in numeric_cols:
+                if quantity not in (unit_price, amount):
+                    candidates.append({**base, "quantity": quantity})
+    return candidates
+
+
+def _best_mapping(
+    header_mapping: dict[str, int], rows: list[list[str]]
+) -> dict[str, int]:
+    """헤더로 만든 매핑을 검산으로 확인하고, 틀렸으면 더 맞는 것으로 바꾼다."""
+    score, checked = _score_mapping(rows, header_mapping)
+    if checked == 0 or score >= 0.5:
+        return header_mapping  # 검산할 수 없거나 대체로 맞으면 헤더를 믿는다
+
+    best, best_score = header_mapping, score
+    for candidate in _candidate_mappings(rows):
+        candidate_score, candidate_checked = _score_mapping(rows, candidate)
+        if candidate_checked and candidate_score > best_score:
+            best, best_score = candidate, candidate_score
+    return best
+
+
 def parse_line_items(markdown: str) -> list[LineItem]:
     """마크다운에서 품목을 읽어낸다. 품목 표를 찾지 못하면 빈 목록."""
     items: list[LineItem] = []
@@ -192,7 +266,9 @@ def parse_line_items(markdown: str) -> list[LineItem]:
         mapping = map_columns(header)
 
         if "description" in mapping and "amount" in mapping:
-            # 헤더가 그대로 읽히는 표
+            # 헤더가 읽히는 표. 다만 Docling이 헤더와 데이터를 어긋나게 복원하는
+            # 경우가 있어(invoice-2-1), 이름만 믿지 않고 검산으로 확인한다.
+            mapping = _best_mapping(mapping, rows)
             active = mapping
             data_rows = rows
         elif active is not None and _looks_like_data(header, active) and len(header) == max(active.values()) + 1:
