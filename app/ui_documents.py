@@ -102,7 +102,8 @@ def _render_detail(doc_id: int) -> None:
 
 
 _HEADER_LABELS = {
-    "invoice_number": "송장 번호",
+    "doc_type": "문서 유형",
+    "invoice_number": "문서 번호",
     "issue_date": "발행일",
     "due_date": "지급 기한",
     "vendor_name": "공급자명",
@@ -150,6 +151,7 @@ def _render_db_record(doc: dict, doc_id: int) -> None:
                     "description": "품목",
                     "quantity": "수량",
                     "unit_price": "단가",
+                    "tax": "세액",
                     "amount": "금액",
                 }
             ),

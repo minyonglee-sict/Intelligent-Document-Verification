@@ -25,6 +25,20 @@ SUMMARY_ROW = re.compile(
     r"balance\s*due|grand\s*total)\b|합계|소계|부가세|공급가액"
 )
 
+# 한 칸이 통째로 이 라벨이면 그 행은 합계 구역이다. 'TOTAL' 처럼 짧은 낱말은
+# 부분 일치로 걸면 'Total Station' 같은 진짜 품목까지 지워지므로 칸 전체를 본다.
+SUMMARY_LABELS = {
+    "total", "subtotal", "sub total", "sub-total", "tax", "vat", "sales tax",
+    "shipping", "handling", "discount", "balance", "amount due", "total due",
+    "grand total", "합계", "소계", "총계", "부가세", "세액", "공급가액", "할인",
+}
+
+
+def _is_summary_row(cells: list[str]) -> bool:
+    if SUMMARY_ROW.search(" ".join(cells)):
+        return True
+    return any(c.strip().lower().rstrip(":") in SUMMARY_LABELS for c in cells)
+
 # 수량 열이 따로 없을 때 품목명 안에 섞여 있는 수량 표기.
 #   'Exterior Protection (10)'  /  'Dwarf Senna Qty. 2'
 EMBEDDED_COUNT = [
@@ -40,6 +54,7 @@ EMBEDDED_COUNT = [
 #     수량으로 먼저 잡혀 품목명 열을 통째로 잃는 일이 있었다.
 COLUMN_HINTS: list[tuple[str, tuple[str, ...]]] = [
     ("unit_price", ("unit price", "item price", "unit cost", "rate", "price", "단가")),
+    ("tax", ("tax", "vat", "세액", "부가세")),
     ("amount", ("line total", "total", "amount", "금액", "합계")),
     ("description", ("description", "service", "product", "item", "품목", "내역", "적요")),
     ("quantity", ("quantity", "qty", "ordered", "units", "수량")),
@@ -169,8 +184,16 @@ def _build_item(cells: list[str], mapping: dict[str, int]) -> Optional[LineItem]
     amount = to_number(_cell(cells, mapping, "amount"))
     unit_price = to_number(_cell(cells, mapping, "unit_price"))
     quantity = to_number(_cell(cells, mapping, "quantity"))
+    tax = to_number(_cell(cells, mapping, "tax"))
 
     if not description and amount is None:
+        return None
+
+    # 숫자가 하나도 없는 행은 품목이 아니라 안내문·주석이다.
+    # ('Please make the payment by the due date.' 가 품목으로 들어온 적이 있다)
+    if all(v is None for v in (amount, unit_price, quantity, tax)) and not any(
+        _is_number(c) for c in cells
+    ):
         return None
 
     embedded = _embedded_quantities(description)
@@ -203,6 +226,7 @@ def _build_item(cells: list[str], mapping: dict[str, int]) -> Optional[LineItem]
         quantity=quantity,
         unit_price=unit_price,
         amount=amount,
+        tax=tax,
     )
 
 
@@ -249,7 +273,7 @@ def _score_mapping(rows: list[list[str]], mapping: dict[str, int]) -> tuple[floa
     """
     checked = ok = 0
     for cells in rows:
-        if SUMMARY_ROW.search(" ".join(cells)):
+        if _is_summary_row(cells):
             continue
         item = _build_item(cells, mapping)
         if item is None or None in (item.quantity, item.unit_price, item.amount):
@@ -350,7 +374,7 @@ def parse_line_items(markdown: str) -> list[LineItem]:
         # 행들을 함께 봐야 하기 때문이다.
         fragment: list[LineItem] = []
         for cells in data_rows:
-            if SUMMARY_ROW.search(" ".join(cells)):
+            if _is_summary_row(cells):
                 continue
             item = _build_item(cells, mapping)
             if item is not None:

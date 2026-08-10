@@ -93,10 +93,24 @@ def _num_input(label: str, value, key: str):
 
 def field_editor(fields: InvoiceFields, key_prefix: str) -> InvoiceFields:
     """추출 필드 편집 폼. 사용자가 수정한 값을 담은 새 InvoiceFields를 돌려준다."""
+    from .validator import DOC_TYPE_LABELS
+
+    types = list(DOC_TYPE_LABELS)
+    doc_type = st.radio(
+        "문서 유형",
+        types,
+        index=types.index(fields.doc_type) if fields.doc_type in types else 2,
+        format_func=lambda t: DOC_TYPE_LABELS[t]["name"],
+        horizontal=True,
+        key=f"{key_prefix}_type",
+        help="자동 분류입니다. 틀렸으면 바꾸세요 — 유형에 따라 항목 이름이 달라집니다.",
+    )
+    number_label = DOC_TYPE_LABELS[doc_type]["invoice_number"]
+
     c1, c2, c3 = st.columns(3)
     with c1:
         invoice_number = st.text_input(
-            "송장 번호", fields.invoice_number or "", key=f"{key_prefix}_inv"
+            number_label, fields.invoice_number or "", key=f"{key_prefix}_inv"
         )
         vendor_name = st.text_input(
             "공급자명", fields.vendor_name or "", key=f"{key_prefix}_vendor"
@@ -119,11 +133,11 @@ def field_editor(fields: InvoiceFields, key_prefix: str) -> InvoiceFields:
     st.markdown("**품목**")
     df = pd.DataFrame(
         [i.model_dump() for i in fields.line_items],
-        columns=["description", "quantity", "unit_price", "amount"],
+        columns=["description", "quantity", "unit_price", "tax", "amount"],
     )
     # 빈 목록이면 object 컬럼이 되어 NumberColumn 설정과 충돌한다. dtype을 고정한다.
     df["description"] = df["description"].fillna("").astype("string")
-    for column in ("quantity", "unit_price", "amount"):
+    for column in ("quantity", "unit_price", "tax", "amount"):
         df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
 
     # 오류 메시지는 'line_items[20]'처럼 1부터 센다. 표의 기본 인덱스는 0부터라
@@ -142,6 +156,7 @@ def field_editor(fields: InvoiceFields, key_prefix: str) -> InvoiceFields:
             "description": st.column_config.TextColumn("품목", width="large"),
             "quantity": st.column_config.NumberColumn("수량", format="%.2f"),
             "unit_price": st.column_config.NumberColumn("단가", format="%.2f"),
+            "tax": st.column_config.NumberColumn("세액", format="%.2f"),
             "amount": st.column_config.NumberColumn("금액", format="%.2f"),
         },
     )
@@ -161,7 +176,7 @@ def field_editor(fields: InvoiceFields, key_prefix: str) -> InvoiceFields:
     line_items = []
     for row in edited.to_dict("records"):
         description = (row.get("description") or "").strip()
-        values = (row.get("quantity"), row.get("unit_price"), row.get("amount"))
+        values = (row.get("quantity"), row.get("unit_price"), row.get("tax"), row.get("amount"))
         if not description and all(v is None or pd.isna(v) for v in values):
             continue  # 빈 행은 버린다
         line_items.append(
@@ -169,11 +184,13 @@ def field_editor(fields: InvoiceFields, key_prefix: str) -> InvoiceFields:
                 description=description,
                 quantity=_clean_number(row.get("quantity")),
                 unit_price=_clean_number(row.get("unit_price")),
+                tax=_clean_number(row.get("tax")),
                 amount=_clean_number(row.get("amount")),
             )
         )
 
     return InvoiceFields(
+        doc_type=doc_type,
         invoice_number=invoice_number or None,
         issue_date=issue_date or None,
         due_date=due_date or None,

@@ -26,6 +26,7 @@ from .schemas import InvoiceFields, InvoiceHeader, LineItem, ValidationIssue
 # 송장 머리말 필드는 JSON 덩어리가 아니라 실제 컬럼으로 저장한다.
 # 컬럼이어야 SQL로 바로 조회·집계할 수 있고, 화면에서도 있는 그대로 보인다.
 HEADER_COLUMNS: list[tuple[str, str]] = [
+    ("doc_type", "NVARCHAR(20)"),
     ("invoice_number", "NVARCHAR(100)"),
     ("issue_date", "NVARCHAR(32)"),
     ("due_date", "NVARCHAR(32)"),
@@ -83,7 +84,8 @@ SCHEMA_STATEMENTS = [
         description NVARCHAR(MAX),
         quantity    FLOAT,
         unit_price  FLOAT,
-        amount      FLOAT
+        amount      FLOAT,
+        tax         FLOAT
     )
     """,
     """
@@ -176,6 +178,26 @@ def init_db() -> None:
     with connect(autocommit=True) as conn:
         for statement in SCHEMA_STATEMENTS:
             conn.execute(statement)
+        _add_missing_columns(conn)
+
+
+def _add_missing_columns(conn: pyodbc.Connection) -> None:
+    """이미 만들어진 테이블에 나중에 늘어난 컬럼을 채워 넣는다."""
+    wanted = {
+        "documents": HEADER_COLUMNS,
+        "line_items": [("tax", "FLOAT")],
+    }
+    for table, columns in wanted.items():
+        existing = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)",
+                f"dbo.{table}",
+            )
+        }
+        for name, kind in columns:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE dbo.{table} ADD {name} {kind}")
 
 
 # --------------------------------------------------------------------------
@@ -196,9 +218,9 @@ def _write_fields(conn: pyodbc.Connection, doc_id: int, fields: InvoiceFields) -
         cursor.fast_executemany = True
         cursor.executemany(
             "INSERT INTO dbo.line_items (document_id, position, description,"
-            " quantity, unit_price, amount) VALUES (?,?,?,?,?,?)",
+            " quantity, unit_price, amount, tax) VALUES (?,?,?,?,?,?,?)",
             [
-                (doc_id, pos, i.description, i.quantity, i.unit_price, i.amount)
+                (doc_id, pos, i.description, i.quantity, i.unit_price, i.amount, i.tax)
                 for pos, i in enumerate(fields.line_items, start=1)
             ],
         )
@@ -454,7 +476,7 @@ def get_line_items(doc_id: int) -> list[dict[str, Any]]:
     with connect(autocommit=True) as conn:
         return _rows(
             conn.execute(
-                "SELECT id, position, description, quantity, unit_price, amount"
+                "SELECT id, position, description, quantity, unit_price, amount, tax"
                 "  FROM dbo.line_items WHERE document_id=? ORDER BY position",
                 doc_id,
             )
@@ -464,12 +486,14 @@ def get_line_items(doc_id: int) -> list[dict[str, Any]]:
 def load_fields(row: dict[str, Any]) -> InvoiceFields:
     """documents 컬럼 + line_items 행을 InvoiceFields 로 되살린다."""
     header = {name: row.get(name) for name in HEADER_FIELDS}
+    header["doc_type"] = header.get("doc_type") or "UNKNOWN"
     items = [
         LineItem(
             description=i["description"] or "",
             quantity=i["quantity"],
             unit_price=i["unit_price"],
             amount=i["amount"],
+            tax=i.get("tax"),
         )
         for i in get_line_items(int(row["id"]))
     ]

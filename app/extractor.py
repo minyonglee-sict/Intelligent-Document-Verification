@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -43,7 +44,10 @@ def extract(pdf_path: str | Path) -> ExtractionResult:
     result = get_converter().convert(str(pdf_path))
     doc = result.document
 
-    markdown = doc.export_to_markdown()
+    # Docling 마크다운에는 '&amp;' 같은 HTML 엔티티가 그대로 남는다. 그대로 두면
+    # 'KCC I&amp;C' 를 회사명으로 못 알아보는 등 LLM 추출이 나빠지고, 화면에도
+    # 그렇게 보인다. 여기서 한 번 풀어 downstream 전체가 깨끗한 글자를 보게 한다.
+    markdown = html.unescape(doc.export_to_markdown())
     docling_json = doc.export_to_dict()
 
     try:

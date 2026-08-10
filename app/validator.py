@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from datetime import date, datetime
@@ -51,7 +52,9 @@ This call extracts the header and summary fields ONLY. Ignore the individual row
 of the goods/services table.
 
 Field guidance:
-- invoice_number: usually labelled "INVOICE #", "INVOICE NO", "번호". Not the P.O. number.
+- invoice_number: the document's own number. Labelled "INVOICE #", "INVOICE NO",
+  "RECEIPT #", "Receipt#", "영수증 번호", "번호" depending on the document type.
+  Not the P.O. number and not the customer ID.
 - po_number: labelled "P.O. NUMBER", "PURCHASE ORDER".
 - issue_date: the invoice date ("DATE:", "발행일"). due_date: the payment deadline.
   Both must be normalized to YYYY-MM-DD. Ambiguous formats like 04.05.2021 are
@@ -228,6 +231,7 @@ def extract_fields(markdown: str) -> tuple[InvoiceFields, list[ValidationIssue]]
         )
     )
     header = InvoiceHeader(
+        doc_type=classify_document(markdown),
         invoice_number=to_text(raw_header.invoice_number),
         issue_date=to_text(raw_header.issue_date),
         due_date=to_text(raw_header.due_date),
@@ -255,7 +259,40 @@ def extract_fields(markdown: str) -> tuple[InvoiceFields, list[ValidationIssue]]
                 source="rule",
             )
         )
-    return InvoiceFields(**header.model_dump(), line_items=line_items), issues
+    fields = InvoiceFields(**header.model_dump(), line_items=line_items)
+
+    # 상호는 첫 제목에서 결정적으로 건질 수 있는 경우가 많다. LLM이 놓쳤을 때만 쓴다.
+    if fields.vendor_name in (None, ""):
+        candidate = vendor_from_heading(markdown)
+        if candidate:
+            fields.vendor_name = candidate
+            issues.append(
+                ValidationIssue(
+                    field="vendor_name",
+                    message=(
+                        f"공급자명이 비어 있어 문서 제목의 '{candidate}' 로 "
+                        f"채웠습니다. 확인 후 승인하세요."
+                    ),
+                    severity="warning",
+                    source="rule",
+                )
+            )
+
+    # 비어 있는 필드를 좁게 되묻는다. 여기서 하는 이유는, 근거가 확인된 값을
+    # 그 자리에서 채워 넣어야 저장까지 이어지기 때문이다. 검증 단계에서 하면
+    # 값을 찾아 놓고도 빈 칸으로 남는다.
+    try:
+        issues += probe_missing_fields(markdown, fields)
+    except Exception as exc:
+        issues.append(
+            ValidationIssue(
+                field="document",
+                message=f"빈 필드 재확인을 수행하지 못했습니다: {exc}",
+                severity="warning",
+                source="rule",
+            )
+        )
+    return fields, issues
 
 
 def _extract_line_items(markdown: str) -> tuple[list[LineItem], Optional[str]]:
@@ -339,15 +376,29 @@ GROUNDED_FIELDS: list[tuple[str, str, str]] = [
 
 
 def _normalize(text: str) -> str:
-    return _WS.sub(" ", text).lower()
+    # Docling 마크다운에는 '&amp;' 같은 HTML 엔티티가 그대로 남아 있고, 모델은
+    # 보통 '&' 로 돌려준다. 풀어서 비교하지 않으면 멀쩡한 값이 근거 없음이 된다.
+    return _WS.sub(" ", html.unescape(text)).lower()
+
+
+_MONTH_NAMES = [
+    ("Jan", "January"), ("Feb", "February"), ("Mar", "March"), ("Apr", "April"),
+    ("May", "May"), ("Jun", "June"), ("Jul", "July"), ("Aug", "August"),
+    ("Sep", "September"), ("Oct", "October"), ("Nov", "November"), ("Dec", "December"),
+]
 
 
 def _date_variants(value: str) -> list[str]:
-    """YYYY-MM-DD 를 문서에 쓰였을 법한 표기들로 펼친다."""
+    """YYYY-MM-DD 를 문서에 쓰였을 법한 표기들로 펼친다.
+
+    숫자 표기만 만들면 'Jan 03, 2024' 같은 영문 월 이름을 못 찾아, 맞게 추출한
+    날짜를 근거 없음으로 오판해 비워버린다(Receipt_1.pdf 에서 실제로 발생).
+    """
     parsed = _parse_date(value)
     if parsed is None:
         return [value]
     y, m, d = parsed.year, parsed.month, parsed.day
+
     out = []
     for sep in (".", "/", "-", " "):
         out += [
@@ -357,6 +408,17 @@ def _date_variants(value: str) -> list[str]:
             f"{d}{sep}{m}{sep}{y}",
             f"{m}{sep}{d}{sep}{y}",
         ]
+
+    for name in _MONTH_NAMES[m - 1]:  # 약어와 전체 이름 둘 다
+        out += [
+            f"{name} {d:02d}, {y}", f"{name} {d}, {y}",
+            f"{name} {d:02d} {y}", f"{name} {d} {y}",
+            f"{d:02d} {name} {y}", f"{d} {name} {y}",
+            f"{d}-{name}-{y}", f"{d:02d}-{name}-{y}",
+        ]
+
+    # 한국어 표기
+    out += [f"{y}년 {m}월 {d}일", f"{y}년 {m:02d}월 {d:02d}일"]
     return out
 
 
@@ -371,11 +433,16 @@ def _number_variants(value: float) -> list[str]:
 
 
 def _appears_in(haystack: str, value, kind: str) -> bool:
-    """값이 원문에 있는지 본다. 날짜·숫자는 표기 차이를 감안한다."""
+    """값이 원문에 있는지 본다. 날짜·숫자는 표기 차이를 감안한다.
+
+    모델이 숫자 자리에 여러 값을 뭉쳐 돌려주는 일이 있어(예: '1440.00\\n1632.00'),
+    변환에 실패하면 글자 그대로 비교한다. 여기서 예외가 나면 검증 전체가 멈춘다.
+    """
     if kind == "date":
         candidates = _date_variants(str(value))
     elif kind == "number":
-        candidates = _number_variants(float(value))
+        number = value if isinstance(value, (int, float)) else to_number(str(value))
+        candidates = _number_variants(float(number)) if number is not None else [str(value)]
     else:
         candidates = [str(value)]
     return any(_normalize(c) in haystack for c in candidates if c)
@@ -401,6 +468,27 @@ def drop_ungrounded(
         value = getattr(fields, name)
         if value in (None, "") or _appears_in(haystack, value, kind):
             continue
+
+        # 거래처명은 모델이 상호와 주소를 뭉쳐 돌려주면서 줄 순서를 바꾸기도 한다
+        # ('UiPath / 60th Floor, 1 Vanderbilt Ave' <- 원문은 순서가 반대).
+        # 통째로 버리면 원문에 분명히 있는 상호까지 잃으므로 첫 줄만 살려 본다.
+        if kind == "text":
+            head = re.split(r"[\n,]", str(value))[0].strip()
+            if head and head != str(value) and _appears_in(haystack, head, kind):
+                setattr(fields, name, head)
+                issues.append(
+                    ValidationIssue(
+                        field=name,
+                        message=(
+                            f"{label}으로 추출된 값이 원문과 달라 첫 줄 '{head}' 만 "
+                            f"남겼습니다. 필요하면 직접 고치세요."
+                        ),
+                        severity="warning",
+                        source="rule",
+                    )
+                )
+                continue
+
         setattr(fields, name, None)
         issues.append(
             ValidationIssue(
@@ -477,6 +565,16 @@ def probe_missing_fields(markdown: str, fields: InvoiceFields) -> list[Validatio
     )
     result = FieldProbeResult.model_validate(payload)
 
+    # 모델은 합계 자리에 품목 한 줄의 값을 집어오곤 한다(총액으로 2426.58, 세액으로
+    # 품목 세액 1440.00 을 제안한 적이 있다). 그 값들은 원문에 있으니 근거 대조는
+    # 통과하지만 그 자리의 값이 아니다. 품목에 이미 있는 숫자는 제안에서 뺀다.
+    item_numbers = {
+        round(v, 2)
+        for i in fields.line_items
+        for v in (i.amount, i.tax, i.unit_price)
+        if v is not None
+    }
+
     issues: list[ValidationIssue] = []
     for finding in result.findings:
         name = finding.field
@@ -487,13 +585,36 @@ def probe_missing_fields(markdown: str, fields: InvoiceFields) -> list[Validatio
             continue  # 문서에 없다고 답함 - 정상
         if not _appears_in(haystack, value, _FIELD_KINDS.get(name, "text")):
             continue  # 근거 없는 주장 - 버린다
+        kind = _FIELD_KINDS.get(name, "text")
         label = _FIELD_LABELS.get(name, name)
+
+        if kind == "number":
+            number = to_number(value)
+            if number is not None and round(number, 2) in item_numbers:
+                continue  # 품목 값을 합계 자리에 옮겨 온 것 - 버린다
+            # 금액은 어느 자리의 값인지 틀리기 쉬우므로 제안만 하고 채우지 않는다.
+            issues.append(
+                ValidationIssue(
+                    field=name,
+                    message=(
+                        f"{label}이(가) 비어 있지만 원문에 '{value}' 이(가) 있습니다. "
+                        f"확인 후 채워 넣으세요."
+                    ),
+                    severity="warning",
+                    source="llm",
+                )
+            )
+            continue
+
+        # 글자 값은 원문에 그대로 있는 것이 확인됐으므로 채운다. 검수자에게
+        # 이미 검증된 값을 다시 타이핑하게 할 이유가 없다.
+        setattr(fields, name, value)
         issues.append(
             ValidationIssue(
                 field=name,
                 message=(
-                    f"{label}이(가) 비어 있지만 원문에 '{value}' 이(가) 있습니다. "
-                    f"확인 후 채워 넣으세요."
+                    f"{label}이(가) 비어 있어 원문에서 찾은 '{value}' 로 채웠습니다. "
+                    f"확인 후 승인하세요."
                 ),
                 severity="warning",
                 source="llm",
@@ -508,15 +629,83 @@ def probe_missing_fields(markdown: str, fields: InvoiceFields) -> list[Validatio
 # 4) 규칙 기반 검증 (결정적)
 # --------------------------------------------------------------------------
 
-# 이게 없으면 어떤 청구인지, 누구에게 언제 지급할지를 알 수 없는 것들.
+# 이게 없으면 어떤 거래인지, 누구와 언제 거래했는지를 알 수 없는 것들.
 # total_amount 는 일부러 뺐다 -- 총액 구역이 아예 없는 송장 양식이 실제로 있고
 # (invoice-2-0.pdf), 그런 문서를 매번 검수로 돌리는 것은 소음이다.
 # 대신 총액이 '있을 때'는 아래 산술 검사가 값을 확인한다.
 REQUIRED_FIELDS = {
-    "invoice_number": "송장 번호",
+    "invoice_number": "문서 번호",
     "issue_date": "발행일",
     "vendor_name": "공급자명",
 }
+
+# 문서 유형별 표기. 같은 컬럼이라도 화면에 부르는 이름이 달라야 한다.
+DOC_TYPE_LABELS = {
+    "INVOICE": {"name": "송장", "invoice_number": "송장 번호"},
+    "RECEIPT": {"name": "영수증", "invoice_number": "영수증 번호"},
+    "UNKNOWN": {"name": "문서", "invoice_number": "문서 번호"},
+}
+
+# 유형 판별 단서. 문서 상단·제목에 쓰이는 낱말이라 결정적으로 볼 수 있다.
+_TYPE_HINTS: list[tuple[str, tuple[str, ...]]] = [
+    ("RECEIPT", ("receipt#", "receipt #", "receipt no", "영수증", "수령증", "receipt")),
+    ("INVOICE", ("invoice#", "invoice #", "invoice no", "세금계산서", "청구서", "invoice")),
+]
+
+
+_HEADING = re.compile(r"^#{1,3}\s+(.+?)\s*$", re.M)
+_DOC_WORDS = re.compile(r"(?i)invoice|receipt|bill\s*to|ship\s*to|영수증|청구서|세금계산서")
+
+# 상호가 아니라 문서의 구조를 가리키는 제목들. 'To' 같은 낱말이 상호로 잡힌 적이 있다.
+_STRUCTURE_TITLES = {
+    "to", "from", "bill to", "ship to", "sold to", "remit to", "comments", "notes",
+    "description", "terms", "summary", "details", "items", "수신", "발신", "비고",
+    "적요", "내역", "합계",
+}
+
+
+def vendor_from_heading(markdown: str) -> Optional[str]:
+    """문서 맨 위 제목에서 발행사명을 건져낸다.
+
+    송장·영수증은 대개 레터헤드(상호)가 첫 제목이다. LLM이 이걸 실행마다 다르게
+    놓치므로(KCC I&C 를 한 번은 찾고 한 번은 못 찾았다) 결정적으로 보완한다.
+
+    다만 'INVOICE 0012456' 처럼 제목이 문서 종류와 번호인 양식도 있어, 그런
+    낱말이 들어 있거나 숫자뿐이면 상호로 보지 않는다.
+
+    **첫 제목만** 본다. 아래로 훑으면 'Instructions', 'To' 같은 구조 제목을
+    상호로 집어온다. 근거가 약하면 채우지 않는 편이 낫다.
+    """
+    match = _HEADING.search(markdown)
+    if match is None:
+        return None
+
+    title = html.unescape(match.group(1)).strip()
+    if len(title) < 3 or _DOC_WORDS.search(title):
+        return None
+    if title.lower().rstrip(":").strip() in _STRUCTURE_TITLES:
+        return None
+    letters = sum(c.isalpha() for c in title)
+    if letters < 2 or letters < len(title.replace(" ", "")) * 0.5:
+        return None  # 숫자·기호 위주면 상호가 아니다
+    return title
+
+
+def classify_document(markdown: str) -> str:
+    """문서 유형을 판별한다.
+
+    LLM에 묻지 않는다. 'RECEIPT' / 'INVOICE' 같은 낱말은 문서가 스스로 밝히는
+    사실이고, 그런 것은 규칙이 더 정확하고 빠르다. 둘 다 나오면 더 앞쪽(제목에
+    가까운 쪽)에 등장한 것을 택한다.
+    """
+    haystack = _normalize(markdown)
+    best_type, best_pos = "UNKNOWN", len(haystack) + 1
+    for doc_type, hints in _TYPE_HINTS:
+        for hint in hints:
+            pos = haystack.find(hint)
+            if pos >= 0 and pos < best_pos:
+                best_type, best_pos = doc_type, pos
+    return best_type
 
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
@@ -541,11 +730,12 @@ def rule_check(fields: InvoiceFields) -> list[ValidationIssue]:
     # 필수값.
     # '추출이 실패했다'로 읽히지 않게 쓴다. 이 시점에는 추출 실패인지 문서에 원래
     # 없는지 구분되지 않으며, 실제로 총액이 없는 송장 양식도 있다. 판단은 사람 몫이다.
+    labels = DOC_TYPE_LABELS.get(fields.doc_type, DOC_TYPE_LABELS["UNKNOWN"])
     for name, label in REQUIRED_FIELDS.items():
         if getattr(fields, name) in (None, ""):
             add(
                 name,
-                f"{label}이(가) 비어 있습니다. "
+                f"{labels.get(name, label)}이(가) 비어 있습니다. "
                 f"원문을 확인해 채우거나, 문서에 없다면 그대로 승인하세요.",
             )
 
@@ -604,13 +794,19 @@ def rule_check(fields: InvoiceFields) -> list[ValidationIssue]:
         if item.quantity is not None and item.quantity <= 0:
             add(f"line_items[{idx}]", f"{idx}번 품목의 수량이 {item.quantity} 입니다.")
 
-    # 총액 = 공급가액 + 세액 + 배송비
+    # 총액 = 공급가액 + 세액 + 배송비.
+    # 세액을 합계 칸이 아니라 품목별 TAX 열로 적는 양식(영수증에 흔하다)이 있어,
+    # 합계 칸이 비어 있으면 품목 세액의 합을 쓴다.
+    line_tax = sum(i.tax for i in fields.line_items if i.tax is not None)
+    effective_tax = fields.tax if fields.tax is not None else (line_tax or None)
+
     if fields.subtotal is not None and fields.total_amount is not None:
-        expected_total = fields.subtotal + (fields.tax or 0) + (fields.shipping or 0)
+        expected_total = fields.subtotal + (effective_tax or 0) + (fields.shipping or 0)
         if abs(expected_total - fields.total_amount) > tol:
+            source = "품목별 세액 합" if fields.tax is None and line_tax else "세액"
             add(
                 "total_amount",
-                f"공급가액 + 세액 + 배송비 = {expected_total:,.2f} 이지만 "
+                f"공급가액 + {source} + 배송비 = {expected_total:,.2f} 이지만 "
                 f"총 청구 금액은 {fields.total_amount:,.2f} 입니다.",
             )
     elif (
@@ -662,28 +858,17 @@ def validate(
     fields: InvoiceFields,
     extra_issues: Optional[list[ValidationIssue]] = None,
 ) -> ValidationResult:
-    """세 갈래를 합친다.
+    """결정적인 두 갈래로 판정한다.
 
-      - rule_check       : 산술·날짜·필수값 (결정적)
-      - grounding_check  : 추출값이 원문에 실제로 있는지 (결정적, 환각 차단)
-      - probe_missing_fields : 비어 있는 필드만 LLM에게 되묻기 (근거 확인된 것만)
+      - rule_check      : 산술·날짜·필수값
+      - grounding_check : 추출값이 원문에 실제로 있는지 (환각 차단)
 
-    extra_issues 에는 추출 단계에서 발견된 문제(품목 호출 실패 등)를 넘긴다.
+    LLM이 관여하는 빈 필드 재확인은 extract_fields 에서 이미 끝났고, 그 결과는
+    extra_issues 로 넘어온다. 검증 단계에는 판단이 개입하지 않는다.
     """
     issues = list(extra_issues or [])
     issues += rule_check(fields)
     issues += grounding_check(fields, markdown)
-    try:
-        issues += probe_missing_fields(markdown, fields)
-    except Exception as exc:
-        issues.append(
-            ValidationIssue(
-                field="document",
-                message=f"빈 필드 재확인을 수행하지 못했습니다: {exc}",
-                severity="warning",
-                source="rule",
-            )
-        )
     issues = _dedupe(issues)
     critical = [i for i in issues if i.severity == "critical"]
     return ValidationResult(is_valid=not critical, errors=issues)

@@ -22,9 +22,18 @@ Streamlit 검수 화면 (ERROR / PENDING) → 수정 → 승인 → status='VALI
 
 | 테이블 | 내용 |
 |---|---|
-| `documents` | 문서 1건당 1행. 상태·원문(`markdown`)과 **송장 머리말 11개 컬럼** (`invoice_number`, `issue_date`, `vendor_name`, `subtotal`, `total_amount` …) |
-| `line_items` | 품목 1행당 1행. `document_id` + `position` 순서 |
+| `documents` | 문서 1건당 1행. 상태·원문(`markdown`)과 **머리말 12개 컬럼** (`doc_type`, `invoice_number`, `issue_date`, `vendor_name`, `subtotal`, `total_amount` …) |
+| `line_items` | 품목 1행당 1행. `document_id` + `position` 순서. 품목별 `tax` 포함 |
 | `validation_errors` | 검증 오류 1건당 1행. `resolved=1`이면 해소됨 |
+
+## 문서 유형
+
+`doc_type` 은 `INVOICE` / `RECEIPT` / `UNKNOWN` 입니다. `validator.classify_document()`
+가 원문의 낱말로 **결정적으로** 판별합니다 — 문서가 스스로 밝히는 사실이라 LLM에
+물을 이유가 없습니다. 검수 화면에서 라디오 버튼으로 고칠 수 있습니다.
+
+유형에 따라 같은 컬럼의 이름이 달라집니다 (`invoice_number` → 송장 번호 / 영수증 번호).
+`DOC_TYPE_LABELS` 에 표기를 모아 두었습니다.
 
 기본 접속은 `localhost\SQLEXPRESS` / `DocumentVerification` / Windows 인증입니다.
 DB가 없으면 앱 시작 시 `db.init_db()`가 만듭니다.

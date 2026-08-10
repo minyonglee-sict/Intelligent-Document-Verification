@@ -9,11 +9,15 @@ from pydantic import BaseModel, Field
 Severity = Literal["critical", "warning"]
 
 
+DocType = Literal["INVOICE", "RECEIPT", "UNKNOWN"]
+
+
 class LineItem(BaseModel):
     description: str = Field(default="", description="품목명")
     quantity: Optional[float] = Field(default=None, description="수량")
     unit_price: Optional[float] = Field(default=None, description="단가")
     amount: Optional[float] = Field(default=None, description="금액(수량 x 단가)")
+    tax: Optional[float] = Field(default=None, description="품목별 세액 (TAX 열이 있는 양식)")
 
 
 class InvoiceHeader(BaseModel):
@@ -23,7 +27,8 @@ class InvoiceHeader(BaseModel):
     품목 표와 머리말을 한 번에 요구하면 뒷부분을 잘라먹거나 머리말을 놓친다.
     """
 
-    invoice_number: Optional[str] = Field(default=None, description="송장 번호")
+    doc_type: DocType = Field(default="UNKNOWN", description="문서 유형")
+    invoice_number: Optional[str] = Field(default=None, description="문서 번호 (송장/영수증)")
     issue_date: Optional[str] = Field(default=None, description="발행일 (YYYY-MM-DD)")
     due_date: Optional[str] = Field(default=None, description="지급 기한 (YYYY-MM-DD)")
     vendor_name: Optional[str] = Field(default=None, description="공급자(발행사)명")
