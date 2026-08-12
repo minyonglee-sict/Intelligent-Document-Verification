@@ -35,8 +35,61 @@ BADGE_CSS = """
 }
 .idv-error-row.warning { border-left-color:#f29900; background: rgba(242,153,0,.07); }
 .idv-error-field { font-family: ui-monospace, monospace; font-size:.78rem; opacity:.75; }
+
+/* 오류를 누르면 고쳐야 할 입력칸으로 내려간다. */
+.idv-error-row a.idv-error-link { color: inherit; text-decoration: none; display: block; }
+.idv-error-row:has(a.idv-error-link) { cursor: pointer; }
+.idv-error-row:has(a.idv-error-link):hover { filter: brightness(.97); }
+.idv-error-jump { font-size:.78rem; opacity:.75; white-space: nowrap; }
+
+/* 이동 표적으로만 쓰는 제목(anchor()가 만든다). id 에 '_at_' 가 들어간 것만
+   골라 화면에서 접는다. scroll-margin-top 은 스크롤 뒤 상단에 가리지 않게 한다.
+   감싸는 컨테이너의 세로 gap 까지 음수 마진으로 상쇄해 폼이 벌어지지 않게 한다. */
+[id*="_at_"] {
+    height: 0 !important; margin: 0 !important; padding: 0 !important;
+    font-size: 0 !important; line-height: 0 !important;
+    overflow: hidden !important; scroll-margin-top: 6rem;
+}
+[id*="_at_"] a, [id*="_at_"] svg { display: none !important; }
+
+/* 표적을 감싸는 컨테이너까지 접는다. Streamlit 버전마다 감싸는 요소가 달라
+   자식 선택자(>) 대신 후손으로 넓게 잡는다. */
+div[data-testid="stElementContainer"]:has([id*="_at_"]),
+div.element-container:has([id*="_at_"]),
+div[data-testid="stHeadingWithActionElements"]:has([id*="_at_"]) {
+    height: 0 !important; min-height: 0 !important;
+    padding: 0 !important; margin: 0 0 -1rem 0 !important;
+    overflow: hidden !important; scroll-margin-top: 6rem;
+}
+
+/* 이동해 온 칸을 표시한다. 표적은 높이 0이라 눈에 띄지 않으므로, 바로 뒤에 오는
+   입력칸(다음 요소 컨테이너)에 테두리를 준다. 어느 칸을 고쳐야 하는지 분명해진다. */
+div[data-testid="stElementContainer"]:has([id*="_at_"]:target)
+    + div[data-testid="stElementContainer"],
+div.element-container:has([id*="_at_"]:target) + div.element-container {
+    outline: 2px solid #d93025;
+    outline-offset: 4px;
+    border-radius: 6px;
+    animation: idv-flash 1.2s ease-out 2;
+}
+@keyframes idv-flash {
+    0%, 100% { background: transparent; }
+    35%      { background: rgba(217,48,37,.10); }
+}
+@media (prefers-reduced-motion: reduce) {
+    div[data-testid="stElementContainer"]:has(> div > [id*="_at_"]:target)
+        + div[data-testid="stElementContainer"] { animation: none; }
+}
 </style>
 """
+
+# 검증 오류의 field 값 중 편집 폼에 대응하는 입력칸이 있는 것들.
+# 'line_items[3]' 처럼 첨자가 붙은 것은 대괄호 앞부분으로 맞춘다.
+ANCHORED_FIELDS = {
+    "doc_type", "invoice_number", "issue_date", "due_date", "vendor_name",
+    "buyer_name", "po_number", "line_items", "currency", "subtotal", "tax",
+    "shipping", "total_amount",
+}
 
 _BADGE_CLASS = {
     config.STATUS_ERROR: "error",
@@ -60,8 +113,23 @@ def status_badge(status: str, extra: str = "") -> str:
     )
 
 
-def render_errors(errors: list[dict]) -> None:
-    """검증 에러 목록을 빨간 경고 뱃지와 함께 출력한다."""
+def anchor(key_prefix: str, field: str) -> None:
+    """입력칸 바로 앞에 이동 표적을 심는다. 화면에는 보이지 않는다.
+
+    직접 만든 <div id="..."> 는 마크다운 정화 과정에서 id 가 살아남는다는 보장이
+    없어 표적 노릇을 못 했다. Streamlit이 제목에 직접 붙여 주는 anchor 를 쓴다 --
+    화면의 제목 옆 링크 아이콘이 쓰는 것과 같은 장치라 확실히 동작한다.
+    제목 자체는 CSS로 접어 보이지 않게 한다.
+    """
+    st.subheader("​", anchor=f"{key_prefix}_at_{field}")
+
+
+def render_errors(errors: list[dict], key_prefix: str | None = None) -> None:
+    """검증 에러 목록을 빨간 경고 뱃지와 함께 출력한다.
+
+    key_prefix 를 주면(= 같은 화면에 편집 폼이 있으면) 오류가 그 필드의 입력칸으로
+    가는 링크가 된다. 메시지를 읽고 자리를 찾는 수고를 없애기 위한 것이다.
+    """
     if not errors:
         st.success("미해결 검증 오류가 없습니다.")
         return
@@ -70,13 +138,24 @@ def render_errors(errors: list[dict]) -> None:
         icon = "⚠️" if err.get("severity") == "warning" else "🚨"
         source = "규칙" if err.get("source") == "rule" else "LLM"
         message = html.escape(str(err.get("message", "")))
-        field = html.escape(str(err.get("field") or "document"))
-        st.markdown(
-            f'<div class="idv-error-row {cls}">'
+        field = str(err.get("field") or "document")
+        target = field.split("[", 1)[0]  # 'line_items[3]' -> 'line_items'
+        label = html.escape(field)
+
+        body = (
             f"{icon} {message}<br>"
-            f'<span class="idv-error-field">{field} · {source}</span>'
-            f"</div>",
-            unsafe_allow_html=True,
+            f'<span class="idv-error-field">{label} · {source}</span>'
+        )
+        if key_prefix and target in ANCHORED_FIELDS:
+            body = (
+                f'<a class="idv-error-link" href="#{key_prefix}_at_{target}">'
+                f"{icon} {message}<br>"
+                f'<span class="idv-error-field">{label} · {source}</span>'
+                f'<span class="idv-error-jump"> · 고치러 가기 ↓</span>'
+                f"</a>"
+            )
+        st.markdown(
+            f'<div class="idv-error-row {cls}">{body}</div>', unsafe_allow_html=True
         )
 
 
@@ -96,6 +175,7 @@ def field_editor(fields: InvoiceFields, key_prefix: str) -> InvoiceFields:
     from .validator import DOC_TYPE_LABELS
 
     types = list(DOC_TYPE_LABELS)
+    anchor(key_prefix, "doc_type")
     doc_type = st.radio(
         "문서 유형",
         types,
@@ -109,27 +189,34 @@ def field_editor(fields: InvoiceFields, key_prefix: str) -> InvoiceFields:
 
     c1, c2, c3 = st.columns(3)
     with c1:
+        anchor(key_prefix, "invoice_number")
         invoice_number = st.text_input(
             number_label, fields.invoice_number or "", key=f"{key_prefix}_inv"
         )
+        anchor(key_prefix, "vendor_name")
         vendor_name = st.text_input(
             "공급자명", fields.vendor_name or "", key=f"{key_prefix}_vendor"
         )
     with c2:
+        anchor(key_prefix, "issue_date")
         issue_date = st.text_input(
             "발행일 (YYYY-MM-DD)", fields.issue_date or "", key=f"{key_prefix}_issue"
         )
+        anchor(key_prefix, "buyer_name")
         buyer_name = st.text_input(
             "수신자명", fields.buyer_name or "", key=f"{key_prefix}_buyer"
         )
     with c3:
+        anchor(key_prefix, "due_date")
         due_date = st.text_input(
             "지급 기한 (YYYY-MM-DD)", fields.due_date or "", key=f"{key_prefix}_due"
         )
+        anchor(key_prefix, "po_number")
         po_number = st.text_input(
             "발주 번호", fields.po_number or "", key=f"{key_prefix}_po"
         )
 
+    anchor(key_prefix, "line_items")
     st.markdown("**품목**")
     df = pd.DataFrame(
         [i.model_dump() for i in fields.line_items],
@@ -140,9 +227,12 @@ def field_editor(fields: InvoiceFields, key_prefix: str) -> InvoiceFields:
     for column in ("quantity", "unit_price", "tax", "amount"):
         df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
 
-    # 오류 메시지는 'line_items[20]'처럼 1부터 센다. 표의 기본 인덱스는 0부터라
-    # 그대로 두면 검수자가 한 칸 어긋난 행을 고치게 된다. 번호를 맞춰 보여준다.
-    df.insert(0, "번호", range(1, len(df) + 1))
+    # 표의 기본 인덱스는 0부터라 그대로 두면 검수자가 한 칸 어긋난 행을 고치게 된다.
+    # 문서가 품목 번호를 달고 있으면 그 번호를 쓴다. 원문·오류 메시지·DB가 모두
+    # 같은 번호를 가리켜야 검수자가 행을 찾을 수 있다.
+    numbers = [i.position for i in fields.line_items]
+    has_document_numbers = bool(numbers) and all(n is not None for n in numbers)
+    df.insert(0, "번호", numbers if has_document_numbers else range(1, len(df) + 1))
 
     edited = st.data_editor(
         df,
@@ -163,14 +253,19 @@ def field_editor(fields: InvoiceFields, key_prefix: str) -> InvoiceFields:
 
     a1, a2, a3, a4, a5 = st.columns(5)
     with a1:
+        anchor(key_prefix, "currency")
         currency = st.text_input("통화", fields.currency or "", key=f"{key_prefix}_cur")
     with a2:
+        anchor(key_prefix, "subtotal")
         subtotal = _num_input("공급가액", fields.subtotal, f"{key_prefix}_sub")
     with a3:
+        anchor(key_prefix, "tax")
         tax = _num_input("세액", fields.tax, f"{key_prefix}_tax")
     with a4:
+        anchor(key_prefix, "shipping")
         shipping = _num_input("배송비", fields.shipping, f"{key_prefix}_ship")
     with a5:
+        anchor(key_prefix, "total_amount")
         total_amount = _num_input("총 청구액", fields.total_amount, f"{key_prefix}_total")
 
     line_items = []
@@ -179,8 +274,12 @@ def field_editor(fields: InvoiceFields, key_prefix: str) -> InvoiceFields:
         values = (row.get("quantity"), row.get("unit_price"), row.get("tax"), row.get("amount"))
         if not description and all(v is None or pd.isna(v) for v in values):
             continue  # 빈 행은 버린다
+        # 새로 추가한 행은 번호가 비어 있다. 그때는 문서 번호를 쓰지 않고
+        # 전체를 순번으로 돌린다 (db._write_fields).
+        number = row.get("번호") if has_document_numbers else None
         line_items.append(
             LineItem(
+                position=None if number is None or pd.isna(number) else int(number),
                 description=description,
                 quantity=_clean_number(row.get("quantity")),
                 unit_price=_clean_number(row.get("unit_price")),

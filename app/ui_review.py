@@ -96,7 +96,8 @@ def _render_document(doc_id: int, *, show_recheck: bool) -> None:
         unsafe_allow_html=True,
     )
     st.markdown("##### 검증 오류")
-    render_errors(errors)
+    # 아래 편집 폼과 같은 key_prefix 를 넘겨, 오류를 누르면 그 입력칸으로 내려간다.
+    render_errors(errors, key_prefix=f"doc{doc_id}")
 
     st.divider()
     st.markdown("##### 추출 결과 수정")
