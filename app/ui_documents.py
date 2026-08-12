@@ -7,8 +7,16 @@ import json
 import pandas as pd
 import streamlit as st
 
-from . import config, db
+from . import config, db, pipeline
 from .ui_common import render_errors, status_badge
+
+# 표의 선택 상태는 행 '위치'로 남는다. 문서를 지운 뒤 그대로 두면 같은 위치의
+# 다른 문서가 선택된 것처럼 보이므로, key 를 바꿔 위젯을 새로 만든다.
+_TABLE_VERSION = "documents_table_version"
+
+
+def _reset_table_selection() -> None:
+    st.session_state[_TABLE_VERSION] = st.session_state.get(_TABLE_VERSION, 0) + 1
 
 
 def render() -> None:
@@ -45,21 +53,51 @@ def render() -> None:
             for r in rows
         ]
     )
-    st.caption("행을 클릭하면 아래에 해당 문서의 상세가 열립니다.")
+    st.caption(
+        "행을 클릭하면 아래에 해당 문서의 상세가 열립니다. "
+        "왼쪽 체크박스로 여러 건을 골라 한 번에 삭제할 수 있습니다."
+    )
     event = st.dataframe(
         table,
         width="stretch",
         hide_index=True,
-        key="documents_table",
+        key=f"documents_table_{st.session_state.get(_TABLE_VERSION, 0)}",
         on_select="rerun",
-        selection_mode="single-row",
+        selection_mode="multi-row",
     )
 
     # 선택 인덱스는 표의 행 위치다. 상태 필터를 바꾸면 행 수가 줄어 이전 선택이
-    # 범위를 벗어날 수 있으므로 확인하고, 선택이 없으면 첫 행을 보여준다.
-    selected = event.selection["rows"]
-    position = selected[0] if selected and selected[0] < len(rows) else 0
+    # 범위를 벗어날 수 있으므로 걸러낸다.
+    selected = [i for i in event.selection["rows"] if i < len(rows)]
+
+    _render_delete(rows, selected)
+
+    # 선택이 없으면 첫 행, 여러 건을 골랐으면 첫 번째 것의 상세를 보여준다.
+    position = selected[0] if selected else 0
     _render_detail(int(rows[position]["id"]))
+
+
+def _render_delete(rows: list[dict], selected: list[int]) -> None:
+    """체크한 문서를 삭제한다. 되돌릴 수 없으므로 한 번 더 확인받는다."""
+    if not selected:
+        st.caption("삭제하려면 왼쪽 체크박스로 문서를 고르세요.")
+        return
+
+    targets = [rows[i] for i in selected]
+    column, _ = st.columns([1, 3])
+    with column.popover(f"🗑️ 선택한 {len(targets)}건 삭제"):
+        st.markdown("다음 문서를 삭제합니다. **되돌릴 수 없습니다.**")
+        for row in targets:
+            st.markdown(f"- `#{row['id']}` {row['filename']}")
+        st.caption(
+            "문서·품목·검증 오류 기록과 `data/uploads` 의 원본 파일이 함께 지워집니다. "
+            "같은 파일을 다시 올리면 새로 처리됩니다."
+        )
+        if st.button("삭제", type="primary", key="confirm_bulk_delete"):
+            deleted = pipeline.delete_documents([int(r["id"]) for r in targets])
+            _reset_table_selection()
+            st.toast(f"{deleted}건을 삭제했습니다.", icon="🗑️")
+            st.rerun()
 
 
 def _label(value: str) -> str:
@@ -97,7 +135,8 @@ def _render_detail(doc_id: int) -> None:
         _render_db_record(doc, doc_id)
 
     if st.button("이 문서 삭제", key=f"del{doc_id}"):
-        db.delete_document(doc_id)
+        pipeline.delete_documents([doc_id])
+        _reset_table_selection()
         st.rerun()
 
 

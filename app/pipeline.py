@@ -1,4 +1,7 @@
-"""업로드 -> Docling 추출 -> Ollama 검증 -> MS-SQL 저장 오케스트레이션."""
+"""업로드 -> Docling 추출 -> Ollama 필드 추출 -> 규칙 검증 -> MS-SQL 저장 오케스트레이션.
+
+검수·승인은 여기 없다. 저장까지 끝난 행을 ui_review 가 읽어 사람이 마감한다.
+"""
 
 from __future__ import annotations
 
@@ -130,6 +133,33 @@ def process_pdf(
         status=status,
         error_count=len(result.errors),
     )
+
+
+def delete_documents(doc_ids: list[int]) -> int:
+    """문서를 DB에서 지우고 업로드 원본 파일까지 함께 치운다. 지운 건수를 돌려준다.
+
+    파일을 남기면 같은 문서를 다시 올렸을 때 data/uploads 에 사본이 쌓인다.
+    DB 행이 사라져 중복 검사(file_hash)에 걸리지 않으므로 얼마든지 반복된다.
+
+    DB를 먼저 지운다. 파일부터 지우면 DB 삭제가 실패했을 때 원본 없는 행이 남는다.
+    """
+    paths = db.stored_paths(doc_ids)
+    deleted = db.delete_documents(doc_ids)
+
+    # 우리가 store_upload 로 만든 파일만 지운다. 마이그레이션 등으로 바깥 경로가
+    # 들어와 있어도 엉뚱한 파일을 건드리지 않도록 한 번 확인한다.
+    upload_dir = config.UPLOAD_DIR.resolve()
+    for raw in paths:
+        path = Path(raw)
+        try:
+            resolved = path.resolve()
+            if resolved.parent != upload_dir:
+                continue
+            resolved.unlink(missing_ok=True)
+        except OSError:
+            pass  # 파일이 잠겨 있어도 DB 삭제까지 되돌릴 이유는 없다
+
+    return deleted
 
 
 def recheck(doc_id: int, fields: InvoiceFields, note: Optional[str] = None) -> list:

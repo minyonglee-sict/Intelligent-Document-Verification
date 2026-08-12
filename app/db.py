@@ -179,6 +179,7 @@ def init_db() -> None:
         for statement in SCHEMA_STATEMENTS:
             conn.execute(statement)
         _add_missing_columns(conn)
+        _ensure_sequential_ids(conn)
 
 
 def _add_missing_columns(conn: pyodbc.Connection) -> None:
@@ -200,6 +201,46 @@ def _add_missing_columns(conn: pyodbc.Connection) -> None:
                 conn.execute(f"ALTER TABLE dbo.{table} ADD {name} {kind}")
 
 
+# init_db()는 Streamlit이 스크립트를 다시 실행할 때마다 불린다. 아래 손질은
+# 프로세스당 한 번이면 충분하고, 매 rerun 마다 걸면 낭비인 데다 RESEED가 다른
+# 세션의 INSERT와 겹칠 위험이 있다.
+_identity_checked = False
+
+
+def _ensure_sequential_ids(conn: pyodbc.Connection) -> None:
+    """id 가 1씩 이어지도록 IDENTITY 를 손본다.
+
+    SQL Server 는 INT IDENTITY 의 다음 번호를 1000개씩 미리 잡아 두고, 서비스가
+    재시작되면 쓰지 않은 캐시를 그냥 버린다. 그래서 재시작만 해도 번호가 1000씩
+    건너뛴다 (이 DB에서 실제로 15 -> 1018 이 되었다).
+
+      - IDENTITY_CACHE 를 꺼서 앞으로의 점프를 막고,
+      - 이미 앞서 나간 카운터는 MAX(id) 로 되돌려 회수한다.
+
+    되돌리기는 카운터가 실제 행보다 앞서 있을 때만 한다. 그 번호를 이미 쓴 행이
+    있는데 되돌리면 다음 INSERT 가 기본키 충돌로 실패한다.
+    """
+    global _identity_checked
+    if _identity_checked:
+        return
+    _identity_checked = True
+
+    cached = conn.execute(
+        "SELECT value FROM sys.database_scoped_configurations WHERE name='IDENTITY_CACHE'"
+    ).fetchone()
+    if cached and int(cached[0]):
+        # SQL Server 2017+ 의 DB 단위 설정. 현재 연결된 DB에 적용된다.
+        conn.execute("ALTER DATABASE SCOPED CONFIGURATION SET IDENTITY_CACHE = OFF")
+
+    highest, current = conn.execute(
+        "SELECT ISNULL(MAX(id), 0), IDENT_CURRENT('dbo.documents') FROM dbo.documents"
+    ).fetchone()
+    if int(current) > int(highest):
+        conn.execute(
+            f"DBCC CHECKIDENT ('dbo.documents', RESEED, {int(highest)}) WITH NO_INFOMSGS"
+        )
+
+
 # --------------------------------------------------------------------------
 # 쓰기
 # --------------------------------------------------------------------------
@@ -214,6 +255,14 @@ def _write_fields(conn: pyodbc.Connection, doc_id: int, fields: InvoiceFields) -
     )
     conn.execute("DELETE FROM dbo.line_items WHERE document_id=?", doc_id)
     if fields.line_items:
+        # position 은 문서에 적힌 품목 번호다. 원문과 나란히 대조하려면 저장 순서로
+        # 새로 매기면 안 된다 (실제로 번호가 66 다음 76으로 뛰는 송장이 있다).
+        # 다만 한 행이라도 번호가 없으면 섞어 쓰지 않고 전부 순번으로 돌린다.
+        # 검수 화면에서 행을 추가하면 그 행만 번호가 없어 중복이 생기기 때문이다.
+        numbers = [i.position for i in fields.line_items]
+        if any(n is None for n in numbers):
+            numbers = list(range(1, len(fields.line_items) + 1))
+
         cursor = conn.cursor()
         cursor.fast_executemany = True
         cursor.executemany(
@@ -221,7 +270,7 @@ def _write_fields(conn: pyodbc.Connection, doc_id: int, fields: InvoiceFields) -
             " quantity, unit_price, amount, tax) VALUES (?,?,?,?,?,?,?)",
             [
                 (doc_id, pos, i.description, i.quantity, i.unit_price, i.amount, i.tax)
-                for pos, i in enumerate(fields.line_items, start=1)
+                for pos, i in zip(numbers, fields.line_items)
             ],
         )
 
@@ -410,11 +459,31 @@ def bulk_approve(doc_ids: list[int]) -> int:
     return affected
 
 
-def delete_document(doc_id: int) -> None:
+def delete_documents(doc_ids: list[int]) -> int:
+    """문서들을 자식 행과 함께 지운다. 실제로 지워진 건수를 돌려준다.
+
+    외래키에 ON DELETE CASCADE 가 걸려 있지만, 제약 없이 만들어진 DB 도 있으므로
+    자식부터 명시적으로 지운다.
+
+    DB 행만 지운다. 화면에서 부를 것은 업로드 원본까지 함께 치우는
+    pipeline.delete_documents 다.
+    """
+    if not doc_ids:
+        return 0
+    placeholders = ",".join("?" * len(doc_ids))
     with connect() as conn:
-        conn.execute("DELETE FROM dbo.validation_errors WHERE document_id=?", doc_id)
-        conn.execute("DELETE FROM dbo.line_items WHERE document_id=?", doc_id)
-        conn.execute("DELETE FROM dbo.documents WHERE id=?", doc_id)
+        conn.execute(
+            f"DELETE FROM dbo.validation_errors WHERE document_id IN ({placeholders})",
+            *doc_ids,
+        )
+        conn.execute(
+            f"DELETE FROM dbo.line_items WHERE document_id IN ({placeholders})",
+            *doc_ids,
+        )
+        cursor = conn.execute(
+            f"DELETE FROM dbo.documents WHERE id IN ({placeholders})", *doc_ids
+        )
+        return max(cursor.rowcount, 0)
 
 
 # --------------------------------------------------------------------------
@@ -434,6 +503,21 @@ def list_documents(status: Optional[str] = None) -> list[dict[str, Any]]:
     sql += " ORDER BY id DESC"
     with connect(autocommit=True) as conn:
         return _rows(conn.execute(sql, *params))
+
+
+def stored_paths(doc_ids: list[int]) -> list[str]:
+    """문서들의 업로드 원본 경로. 경로가 비어 있는 행은 빠진다."""
+    if not doc_ids:
+        return []
+    placeholders = ",".join("?" * len(doc_ids))
+    with connect(autocommit=True) as conn:
+        rows = _rows(
+            conn.execute(
+                f"SELECT stored_path FROM dbo.documents WHERE id IN ({placeholders})",
+                *doc_ids,
+            )
+        )
+    return [r["stored_path"] for r in rows if r["stored_path"]]
 
 
 def get_document(doc_id: int) -> Optional[dict[str, Any]]:
@@ -489,6 +573,7 @@ def load_fields(row: dict[str, Any]) -> InvoiceFields:
     header["doc_type"] = header.get("doc_type") or "UNKNOWN"
     items = [
         LineItem(
+            position=i["position"],
             description=i["description"] or "",
             quantity=i["quantity"],
             unit_price=i["unit_price"],
