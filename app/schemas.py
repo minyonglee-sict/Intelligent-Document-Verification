@@ -13,6 +13,9 @@ DocType = Literal["INVOICE", "RECEIPT", "UNKNOWN"]
 
 
 class LineItem(BaseModel):
+    # 문서에 적힌 품목 번호. 원문과 나란히 놓고 대조할 수 있어야 하므로, 저장 순서로
+    # 새로 매기지 않고 그대로 보존한다. 문서가 번호를 달지 않았으면 None.
+    position: Optional[int] = Field(default=None, description="문서에 적힌 품목 번호")
     description: str = Field(default="", description="품목명")
     quantity: Optional[float] = Field(default=None, description="수량")
     unit_price: Optional[float] = Field(default=None, description="단가")
