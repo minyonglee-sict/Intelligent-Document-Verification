@@ -52,7 +52,7 @@ def sidebar() -> None:
 
 def main() -> None:
     st.title("📄 Intelligent Document Verification")
-    st.caption("Docling 추출 → Ollama 검증 → MS-SQL 저장 → 사람이 검수")
+    st.caption("Docling 추출 → Ollama 필드 추출 → 규칙 검증 → MS-SQL 저장 → 사람이 검수·승인")
 
     sidebar()
 

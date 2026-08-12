@@ -12,7 +12,8 @@ def render() -> None:
     st.subheader("문서 업로드")
     st.caption(
         "송장·영수증 파일을 아래 영역에 드래그앤드롭하세요. "
-        "Docling으로 텍스트를 추출하고 Ollama로 검증한 뒤 MS-SQL에 저장합니다. "
+        "Docling으로 텍스트를 추출한 뒤 품목 표는 파서가, 머리말은 Ollama가 읽고, "
+        "규칙으로 검증해 MS-SQL에 저장합니다. "
         "PDF 외에 Word·PowerPoint·Excel·이미지도 읽습니다."
     )
 
