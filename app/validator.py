@@ -466,7 +466,27 @@ def drop_ungrounded(
 
     for name, label, kind in GROUNDED_FIELDS:
         value = getattr(fields, name)
-        if value in (None, "") or _appears_in(haystack, value, kind):
+        if value in (None, ""):
+            continue
+
+        if _appears_in(haystack, value, kind):
+            # 근거는 있다. 다만 날짜 칸에 날짜가 아닌 값이 들어오는 일이 있다
+            # ('Due 30 days after receipt'). 원문에 분명히 있으니 근거 대조는
+            # 통과하지만 날짜가 아니므로, 그대로 두면 규칙 검증이 곧바로
+            # critical 로 반려한다. 채워 넣느니만 못하므로 비운다.
+            if kind == "date" and _parse_date(value) is None:
+                setattr(fields, name, None)
+                issues.append(
+                    ValidationIssue(
+                        field=name,
+                        message=(
+                            f"{label}에 원문의 '{value}' 이(가) 들어왔지만 날짜가 아니라 "
+                            f"비워 두었습니다. 필요하면 직접 채우세요."
+                        ),
+                        severity="warning",
+                        source="rule",
+                    )
+                )
             continue
 
         # 거래처명은 모델이 상호와 주소를 뭉쳐 돌려주면서 줄 순서를 바꾸기도 한다
@@ -606,6 +626,23 @@ def probe_missing_fields(markdown: str, fields: InvoiceFields) -> list[Validatio
             )
             continue
 
+        # 날짜 칸에는 날짜만 넣는다. 원문의 지급 조건('Due 30 days after receipt')은
+        # 근거 대조를 통과하지만 날짜가 아니어서, 채우면 규칙 검증이 곧바로
+        # critical 로 반려한다. 채우지 않되 무엇을 봤는지는 알린다.
+        if kind == "date" and _parse_date(value) is None:
+            issues.append(
+                ValidationIssue(
+                    field=name,
+                    message=(
+                        f"{label} 자리에 원문의 '{value}' 이(가) 있지만 날짜가 아니라 "
+                        f"채우지 않았습니다. 필요하면 직접 채우세요."
+                    ),
+                    severity="warning",
+                    source="llm",
+                )
+            )
+            continue
+
         # 글자 값은 원문에 그대로 있는 것이 확인됐으므로 채운다. 검수자에게
         # 이미 검증된 값을 다시 타이핑하게 할 이유가 없다.
         setattr(fields, name, value)
@@ -647,10 +684,20 @@ DOC_TYPE_LABELS = {
 }
 
 # 유형 판별 단서. 문서 상단·제목에 쓰이는 낱말이라 결정적으로 볼 수 있다.
-_TYPE_HINTS: list[tuple[str, tuple[str, ...]]] = [
-    ("RECEIPT", ("receipt#", "receipt #", "receipt no", "영수증", "수령증", "receipt")),
-    ("INVOICE", ("invoice#", "invoice #", "invoice no", "세금계산서", "청구서", "invoice")),
+# 문서가 스스로를 밝히는 선언. 번호가 따라붙는 형태라 다른 문맥에 걸릴 일이 없다.
+_TYPE_DECLARATIONS: list[tuple[str, tuple[str, ...]]] = [
+    ("RECEIPT", ("receipt#", "receipt #", "receipt no", "영수증", "수령증")),
+    ("INVOICE", ("invoice#", "invoice #", "invoice no", "세금계산서", "청구서")),
 ]
+
+# 선언이 없을 때만 쓰는 약한 단서. 낱말 하나뿐이라 엉뚱한 문맥에 걸릴 수 있다.
+_TYPE_WORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("RECEIPT", ("receipt",)),
+    ("INVOICE", ("invoice",)),
+]
+
+# 'Due 30 days after receipt' 의 receipt 는 지급 조건이지 문서 유형이 아니다.
+_PAYMENT_TERM = re.compile(r"(?:after|upon|on)\s+receipt")
 
 
 _HEADING = re.compile(r"^#{1,3}\s+(.+?)\s*$", re.M)
@@ -691,21 +738,46 @@ def vendor_from_heading(markdown: str) -> Optional[str]:
     return title
 
 
+def _find_hint(haystack: str, hint: str) -> int:
+    """단서의 첫 위치. 지급 조건 표현('after receipt') 안의 것은 건너뛴다."""
+    start = 0
+    while True:
+        pos = haystack.find(hint, start)
+        if pos < 0:
+            return -1
+        if not _PAYMENT_TERM.search(haystack[max(0, pos - 12):pos + len(hint)]):
+            return pos
+        start = pos + 1
+
+
+def _earliest_type(haystack: str, table) -> Optional[str]:
+    """단서들 중 가장 앞(제목에 가까운 쪽)에 나온 것의 유형."""
+    best_type, best_pos = None, len(haystack) + 1
+    for doc_type, hints in table:
+        for hint in hints:
+            pos = _find_hint(haystack, hint)
+            if pos >= 0 and pos < best_pos:
+                best_type, best_pos = doc_type, pos
+    return best_type
+
+
 def classify_document(markdown: str) -> str:
     """문서 유형을 판별한다.
 
     LLM에 묻지 않는다. 'RECEIPT' / 'INVOICE' 같은 낱말은 문서가 스스로 밝히는
-    사실이고, 그런 것은 규칙이 더 정확하고 빠르다. 둘 다 나오면 더 앞쪽(제목에
-    가까운 쪽)에 등장한 것을 택한다.
+    사실이고, 그런 것은 규칙이 더 정확하고 빠르다.
+
+    선언('Invoice No.' / 'Receipt#')을 먼저 찾고, 없을 때만 낱말 하나로 판단한다.
+    낱말끼리 위치로만 겨루면 지급 조건이 유형을 이긴다 -- 'Due 30 days after
+    receipt' 가 'Invoice No. 1210' 보다 앞에 놓인 송장(invoice-1-2.pdf)이
+    RECEIPT 로 분류된 적이 있다. 같은 이유로 그 표현 안의 낱말은 아예 건너뛴다.
     """
     haystack = _normalize(markdown)
-    best_type, best_pos = "UNKNOWN", len(haystack) + 1
-    for doc_type, hints in _TYPE_HINTS:
-        for hint in hints:
-            pos = haystack.find(hint)
-            if pos >= 0 and pos < best_pos:
-                best_type, best_pos = doc_type, pos
-    return best_type
+    return (
+        _earliest_type(haystack, _TYPE_DECLARATIONS)
+        or _earliest_type(haystack, _TYPE_WORDS)
+        or "UNKNOWN"
+    )
 
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
@@ -763,7 +835,11 @@ def rule_check(fields: InvoiceFields) -> list[ValidationIssue]:
             )
 
     # 품목별 수량 x 단가
-    for idx, item in enumerate(fields.line_items, start=1):
+    for order, item in enumerate(fields.line_items, start=1):
+        # 오류 메시지의 번호는 검수 화면·DB가 보여주는 번호와 같아야 검수자가 그 행을
+        # 찾을 수 있다. 문서가 품목 번호를 달고 있으면 그것을 쓴다.
+        idx = item.position if item.position is not None else order
+
         # 값이 빠진 행을 그냥 건너뛰면, 금액이 없는 품목이 합계에서 조용히 사라진다.
         # 검산을 못 하는 것과 문제가 없는 것은 다르므로 반드시 알린다.
         if item.amount is None:
