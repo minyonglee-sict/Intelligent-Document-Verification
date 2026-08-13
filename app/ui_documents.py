@@ -38,9 +38,12 @@ def render() -> None:
         return
 
     counts = db.error_counts()
+    # 순번은 pandas 인덱스가 아니라 실제 열로 넣는다. 인덱스는 0부터 시작하는 데다
+    # 열 목록에서 '(index)' 로 보여 몇 건인지 세는 데 쓰기 어렵다.
     table = pd.DataFrame(
         [
             {
+                "순번": position,
                 "ID": r["id"],
                 "파일명": r["filename"],
                 "상태": config.STATUS_LABELS.get(r["status"], r["status"]),
@@ -50,11 +53,11 @@ def render() -> None:
                 "등록": r["created_at"],
                 "승인": r["validated_at"] or "",
             }
-            for r in rows
+            for position, r in enumerate(rows, start=1)
         ]
     )
     st.caption(
-        "행을 클릭하면 아래에 해당 문서의 상세가 열립니다. "
+        f"총 **{len(rows)}건**. 행을 클릭하면 아래에 해당 문서의 상세가 열립니다. "
         "왼쪽 체크박스로 여러 건을 골라 한 번에 삭제할 수 있습니다."
     )
     event = st.dataframe(
@@ -64,6 +67,9 @@ def render() -> None:
         key=f"documents_table_{st.session_state.get(_TABLE_VERSION, 0)}",
         on_select="rerun",
         selection_mode="multi-row",
+        column_config={
+            "순번": st.column_config.NumberColumn("순번", format="%d", width="small"),
+        },
     )
 
     # 선택 인덱스는 표의 행 위치다. 상태 필터를 바꾸면 행 수가 줄어 이전 선택이
