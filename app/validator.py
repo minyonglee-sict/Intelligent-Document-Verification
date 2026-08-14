@@ -791,7 +791,113 @@ def _parse_date(value: Optional[str]) -> Optional[date]:
     return None
 
 
-def rule_check(fields: InvoiceFields) -> list[ValidationIssue]:
+# 품목명 칸에 수량 표기가 섞여 들어왔는지 본다. Docling이 표의 열 경계를 놓치면
+# "Skid-Steer 822-79-9581 5 pcs. € 200" 처럼 한 칸에 뭉쳐 들어오고, 그러면 수량과
+# 단가가 나란히 비어 아래 검산이 통째로 건너뛰어진다.
+_QUANTITY_IN_TEXT = re.compile(
+    r"(?<![\w.])\d+(?:[.,]\d+)?\s*(?:pcs\b\.?|pc\b\.?|pieces?\b|units?\b|ea\b\.?|개|EA\b)",
+    re.IGNORECASE,
+)
+
+
+def _numbered_in_source(markdown: str, number: int) -> bool:
+    """원문에 'N.' 꼴 품목 번호가 있는지. 표 안('|  7. |')과 밖('7.') 둘 다 본다.
+
+    줄 첫머리로 한정한다. 'Date: 24.06.2020' 같은 본문 속 숫자에 걸리지 않게.
+    """
+    return (
+        re.search(rf"^[ \t]*\|?[ \t]*{number}\.(?=[ \t|]|$)", markdown, re.MULTILINE)
+        is not None
+    )
+
+
+def _line_item_integrity(
+    fields: InvoiceFields, markdown: Optional[str], add
+) -> None:
+    """품목이 '통째로 안 뽑힌' 상태를 잡는다.
+
+    값이 하나도 없으면 검산할 것도 없어 조용히 통과한다 -- 아래 수량 x 단가 검산은
+    둘 다 비면 '금액만 적는 표'로 보고 건너뛰고, 합계 대조는 머리말 금액이 다 비면
+    진입하지 못한다. 그 두 구멍으로 추출 실패가 그대로 VALIDATED 까지 간다.
+    """
+    items = fields.line_items
+    if not items:
+        return
+
+    def number_of(order: int, item) -> int:
+        return item.position if item.position is not None else order
+
+    # 1) 수량·단가를 가진 행이 하나도 없는데, 품목명에 수량 표기가 섞여 있다.
+    #    영수증처럼 금액만 적는 양식과 구분하기 위해 '품목명에 섞였을 것'을 함께 본다.
+    if all(i.quantity is None and i.unit_price is None for i in items):
+        collapsed = [
+            (number_of(order, item), item.description or "")
+            for order, item in enumerate(items, start=1)
+            if _QUANTITY_IN_TEXT.search(item.description or "")
+        ]
+        if collapsed:
+            numbers = ", ".join(str(n) for n, _ in collapsed[:5])
+            more = f" 외 {len(collapsed) - 5}행" if len(collapsed) > 5 else ""
+            sample = collapsed[0][1][:60]
+            add(
+                "line_items",
+                f"{numbers}{more}번 품목의 품목명 칸에 수량·단가가 섞여 들어갔습니다 "
+                f"(예: '{sample}'). 표의 열이 나뉘지 않은 것으로 보입니다. "
+                f"수량·단가를 각 칸에 옮기면 금액을 검산할 수 있습니다.",
+            )
+
+    # 2) 머리말 금액이 하나도 없다. 이러면 합계 대조가 통째로 건너뛰어진다.
+    #    다만 행별 수량 x 단가 검산이 돌고 있다면 아주 눈먼 상태는 아니다. 실제로
+    #    총액 칸 없이 행별 Total 열만 두는 양식이 있어(invoice-2-*), 그것까지
+    #    critical 로 올리면 멀쩡한 문서가 검수 대기로 밀린다. 둘 다 못 하는
+    #    경우에만 critical 로 세운다.
+    if all(
+        getattr(fields, name) is None
+        for name in ("subtotal", "tax", "shipping", "total_amount")
+    ):
+        blind = all(i.quantity is None or i.unit_price is None for i in items)
+        add(
+            "total_amount",
+            f"품목이 {len(items)}행 있는데 공급가액·세액·배송비·총 청구액이 모두 "
+            f"비어 있습니다. 대조할 기준이 없어 합계 검산을 하지 못합니다."
+            + (
+                " 행별 수량 x 단가 검산도 할 수 없어 이 문서는 금액을 전혀 "
+                "검사하지 못합니다."
+                if blind
+                else " 행별 수량 x 단가 검산은 그대로 돕니다."
+            )
+            + " 원문을 확인해 채우거나, 문서에 없다면 그대로 승인하세요.",
+            "critical" if blind else "warning",
+        )
+
+    # 3) 원문의 품목 번호가 저장된 것보다 뒤까지 이어진다 = 뒷부분이 잘렸다.
+    #    문서가 매긴 번호가 1부터 빠짐없이 이어질 때만 본다. 그래야 '다음 번호'가
+    #    의미를 갖고, 번호 없는 양식에 헛짚지 않는다.
+    if not markdown:
+        return
+    positions = [i.position for i in items if i.position is not None]
+    if len(positions) != len(items) or sorted(positions) != list(range(1, len(items) + 1)):
+        return
+
+    missing: list[int] = []
+    following = len(items) + 1
+    # 상한을 둔다. 번호처럼 보이는 목록이 끝없이 이어지는 문서에서 멈추지 못하면
+    # 오류 메시지가 무의미해진다.
+    while len(missing) < 200 and _numbered_in_source(markdown, following):
+        missing.append(following)
+        following += 1
+    if missing:
+        add(
+            "line_items",
+            f"품목을 {len(items)}행까지만 가져왔는데 원문에는 {missing[-1]}번까지 "
+            f"있습니다. {len(missing)}행({missing[0]}~{missing[-1]}번)이 빠졌습니다. "
+            f"표 밖으로 밀려난 행은 표 파싱에서 누락됩니다 -- 원문을 확인하세요.",
+        )
+
+
+def rule_check(
+    fields: InvoiceFields, markdown: Optional[str] = None
+) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
     def add(field: str, message: str, severity: str = "critical") -> None:
@@ -834,6 +940,20 @@ def rule_check(fields: InvoiceFields) -> list[ValidationIssue]:
                 f"{abs(item_sum - fields.subtotal):,.2f} 만큼 다릅니다.",
             )
 
+    # 품목이 통째로 안 뽑힌 상태. 아래 검산들은 값이 있어야 도는 것들이라, 값이
+    # 전부 비면 아무것도 걸리지 않는다. 그 구멍을 여기서 먼저 막는다.
+    _line_item_integrity(fields, markdown, add)
+
+    # 수량·단가를 갖춘 행이 얼마나 되는지. '금액만 적는 표'라는 면제는 양식 전체에
+    # 주는 것이지 행 하나하나에 주는 것이 아니다. 다른 행들이 다 달고 있는데 한 행만
+    # 비었다면 그건 양식이 아니라 그 행이 값을 잃은 것이다.
+    priced_rows = sum(
+        1
+        for i in fields.line_items
+        if i.quantity is not None and i.unit_price is not None
+    )
+    form_has_prices = priced_rows >= max(2, len(fields.line_items) // 2)
+
     # 품목별 수량 x 단가
     for order, item in enumerate(fields.line_items, start=1):
         # 오류 메시지의 번호는 검수 화면·DB가 보여주는 번호와 같아야 검수자가 그 행을
@@ -859,7 +979,18 @@ def rule_check(fields: InvoiceFields) -> list[ValidationIssue]:
             )
             continue
         if item.quantity is None or item.unit_price is None:
-            continue  # 둘 다 없는 양식(금액만 적는 표)은 검산 대상이 아니다
+            # 둘 다 없는 행. 금액만 적는 양식이면 검산 대상이 아니지만, 같은 문서의
+            # 다른 행들이 수량·단가를 달고 있다면 이 행만 값을 잃은 것이다.
+            if form_has_prices:
+                add(
+                    f"line_items[{idx}]",
+                    f"{idx}번 품목 '{item.description[:40]}'의 수량·단가가 비어 "
+                    f"있습니다. 같은 표의 다른 {priced_rows}행은 둘 다 있으니, 이 행만 "
+                    f"값이 빠졌을 수 있습니다. 금액({item.amount:,.2f})은 검산되지 "
+                    f"않은 채로 남습니다.",
+                    "warning",
+                )
+            continue
         expected = item.quantity * item.unit_price
         if abs(expected - item.amount) > tol:
             add(
@@ -943,15 +1074,22 @@ def validate(
     extra_issues 로 넘어온다. 검증 단계에는 판단이 개입하지 않는다.
     """
     issues = list(extra_issues or [])
-    issues += rule_check(fields)
+    issues += rule_check(fields, markdown)
     issues += grounding_check(fields, markdown)
     issues = _dedupe(issues)
     critical = [i for i in issues if i.severity == "critical"]
     return ValidationResult(is_valid=not critical, errors=issues)
 
 
-def revalidate_fields(fields: InvoiceFields) -> ValidationResult:
-    """검수 화면에서 수정한 필드에 대한 빠른 재검증(규칙만, LLM 호출 없음)."""
-    issues = rule_check(fields)
+def revalidate_fields(
+    fields: InvoiceFields, markdown: Optional[str] = None
+) -> ValidationResult:
+    """검수 화면에서 수정한 필드에 대한 빠른 재검증(규칙만, LLM 호출 없음).
+
+    markdown 을 주면 원문과 대조하는 검사(품목 잘림)까지 함께 돈다. 주지 않으면
+    그 검사만 빠지므로, 고치는 도중 오류가 사라졌다 나타났다 하지 않게 호출부에서
+    되도록 넘긴다.
+    """
+    issues = rule_check(fields, markdown)
     critical = [i for i in issues if i.severity == "critical"]
     return ValidationResult(is_valid=not critical, errors=issues)

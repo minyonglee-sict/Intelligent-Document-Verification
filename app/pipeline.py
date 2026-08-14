@@ -168,7 +168,10 @@ def recheck(doc_id: int, fields: InvoiceFields, note: Optional[str] = None) -> l
     상태는 건드리지 않는다. ERROR -> VALIDATED 전환은 담당자의 승인으로만 일어나야
     하고, 여기서 PENDING으로 되돌리면 검수 목록에서 사라져 승인할 수 없게 된다.
     """
-    result = validator.revalidate_fields(fields)
+    # 원문을 함께 넘긴다. 품목이 잘렸는지는 원문과 대조해야 알 수 있고, 빼놓으면
+    # 처음 검증에서 잡힌 오류가 재검증에서 조용히 사라진다.
+    document = db.get_document(doc_id)
+    result = validator.revalidate_fields(fields, (document or {}).get("markdown"))
     db.update_fields(doc_id, fields, note)
     db.replace_errors(doc_id, result.errors)
     return result.errors
