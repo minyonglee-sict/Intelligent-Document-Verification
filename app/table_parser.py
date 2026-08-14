@@ -71,13 +71,38 @@ ROW_NUMBER_NAMES = {
     "번호", "순번", "품번",
 }
 
-NUMERIC = re.compile(r"^\s*[-+]?[\d.,\s]+\s*$")
+# 값 칸은 통화 기호나 단위를 달고 온다: '€ 200', '$1,234.50', 'USD 90', '5 pcs.'.
+# 순수 숫자만 숫자로 치면 이런 칸이 글자 열로 분류되고, _merge_spilled_text 가
+# 그것을 품목명에 합쳐 버린다 -- invoice-7-0.pdf 는 '| 5 pcs. | € 200 |' 두 열을
+# 통째로 품목명에 삼켜 수량·단가가 나란히 비었다. 열 이름이 비어 있어(Docling이
+# 헤더를 못 읽은 표) 이름으로도 구제되지 않았다.
+#
+# 값 전체가 이 꼴일 때만 숫자로 친다. 'Backhoe I 598-31-5899' 같은 품목명이나
+# '598-31-5899' 같은 품번은 걸리지 않는다.
+_CURRENCY = r"[€$£¥₩]|(?:usd|eur|gbp|krw|jpy|cad|aud|chf|cny)\b|원"
+_UNIT = r"(?:pcs?|pieces?|ea|units?|hrs?|hours?|days?|개|EA)\b\.?"
+NUMERIC = re.compile(
+    rf"""(?ix)
+    ^\s*
+    (?:{_CURRENCY})?\s*
+    [-+]?\d[\d.,\s]*
+    \s*(?:(?:{_CURRENCY})|(?:{_UNIT}))?
+    \s*$
+    """
+)
 
 # 품목명 끝에 붙어 들어온 숫자. 단가 칸이 비었을 때 후보로 쓴다.
 TRAILING_NUMBER = re.compile(r"(\d[\d,]*\.?\d*)\s*$")
 
-# 품목 번호로 볼 수 있는 칸. 소수점·쉼표가 있으면 금액이지 번호가 아니다.
-INTEGER = re.compile(r"^\s*(\d{1,4})\s*$")
+# 품목 번호로 볼 수 있는 칸. 쉼표나 소수 자리가 있으면 금액이지 번호가 아니다.
+# '1.' 처럼 마침표를 달고 오는 표기가 흔해 뒤의 점 하나는 허용한다 (invoice-7-0).
+INTEGER = re.compile(r"^\s*(\d{1,4})\.?\s*$")
+
+# 어느 열이 개수이고 어느 열이 값인지 가르는 표기. 곱셈으로는 구분되지 않는다 --
+# '5 pcs.' x '€ 200' 이든 그 반대든 금액은 같아서, 검산만으로는 수량과 단가가
+# 뒤바뀐 채로도 만점이 나온다. 문서가 붙여 놓은 단위를 심판으로 쓴다.
+CURRENCY_MARK = re.compile(rf"(?i){_CURRENCY}")
+UNIT_MARK = re.compile(rf"(?i){_UNIT}")
 
 
 def _to_int(cell: str) -> Optional[int]:
@@ -208,6 +233,31 @@ def _column_shapes(rows: list[list[str]]) -> tuple[list[bool], list[float]]:
         non_numeric = [c for c in cells if not _is_number(c)]
         text_len.append(sum(len(c) for c in non_numeric) / len(cells))
     return numeric, text_len
+
+
+def _column_marks(rows: list[list[str]]) -> tuple[list[bool], list[bool]]:
+    """열마다 (통화 표기가 붙는가, 개수 단위가 붙는가).
+
+    수량과 단가는 검산으로 가릴 수 없다 -- 5 x 200 이든 200 x 5 든 금액이 같아,
+    뒤바뀐 배정도 만점을 받는다. 문서가 칸에 붙여 놓은 표기가 유일한 단서다.
+    """
+    data = [r for r in rows if not _is_summary_row(r)]
+    width = max((len(r) for r in data), default=0)
+
+    money, counted = [], []
+    for idx in range(width):
+        cells = [r[idx].strip() for r in data if idx < len(r) and r[idx].strip()]
+        if not cells:
+            money.append(False)
+            counted.append(False)
+            continue
+        money.append(
+            sum(bool(CURRENCY_MARK.search(c)) for c in cells) / len(cells) >= 0.6
+        )
+        counted.append(
+            sum(bool(UNIT_MARK.search(c)) for c in cells) / len(cells) >= 0.6
+        )
+    return money, counted
 
 
 def infer_mapping(rows: list[list[str]]) -> dict[str, int]:
@@ -473,16 +523,29 @@ def _candidate_mappings(rows: list[list[str]]) -> list[dict[str, int]]:
         return []
     description = max(text_cols, key=lambda i: text_len[i])
 
+    # 통화가 붙은 열은 값이고 'pcs' 가 붙은 열은 개수다. 표기가 있는 문서에서는
+    # 그것을 지켜, 검산만으로는 가려지지 않는 수량/단가 뒤바뀜을 막는다.
+    money, counted = _column_marks(rows)
+    is_money = lambda i: i < len(money) and money[i]
+    is_counted = lambda i: i < len(counted) and counted[i]
+    has_counted = any(counted)
+
     candidates = []
     for unit_price in numeric_cols:
+        if is_counted(unit_price):
+            continue  # 개수 열은 단가가 아니다
         for amount in numeric_cols:
-            if unit_price == amount:
+            if unit_price == amount or is_counted(amount):
                 continue
             base = {"description": description, "unit_price": unit_price, "amount": amount}
             candidates.append(base)
             for quantity in numeric_cols:
-                if quantity not in (unit_price, amount):
-                    candidates.append({**base, "quantity": quantity})
+                if quantity in (unit_price, amount) or is_money(quantity):
+                    continue
+                # 개수 단위를 단 열이 있으면 수량은 그 열이어야 한다
+                if has_counted and not is_counted(quantity):
+                    continue
+                candidates.append({**base, "quantity": quantity})
     return candidates
 
 

@@ -13,8 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from . import config, db, extractor, validator
-from .schemas import InvoiceFields
+from . import config, db, extractor, layout_recovery, validator
+from .schemas import InvoiceFields, ValidationIssue
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -112,6 +112,27 @@ def process_pdf(
         fields, extraction_issues = validator.extract_fields(extraction.markdown)
     except Exception as exc:
         return fail(f"LLM 필드 추출 실패: {exc}", f"LLM 추출 실패: {exc}", extraction)
+
+    # Docling이 표를 놓쳐 문단으로 흩어진 품목을 원본 좌표로 되살린다. 표가 제대로
+    # 읽힌 문서에서는 아무것도 바뀌지 않는다 -- 번호가 비어 있는 자리만 채운다.
+    fields.line_items, restored = layout_recovery.recover_missing_items(
+        fields.line_items, extraction.docling_json
+    )
+    if restored:
+        # 되살린 행은 산술로 확인된 것만 들어오지만, 표에서 곧장 읽은 값과는
+        # 출처가 다르다. 검수자가 그 사실을 모른 채 승인하지 않도록 남긴다.
+        extraction_issues.append(
+            ValidationIssue(
+                field="line_items",
+                message=(
+                    f"품목 {restored}행이 표 밖으로 밀려나 있어 원본 좌표로 되살렸습니다. "
+                    f"수량 x 단가 = 금액 이 맞는 행만 받아들였지만, 표에서 곧장 읽은 "
+                    f"값이 아니니 원문과 한 번 대조하세요."
+                ),
+                severity="warning",
+                source="rule",
+            )
+        )
 
     result = validator.validate(extraction.markdown, fields, extraction_issues)
     status = config.STATUS_PENDING if result.is_valid else config.STATUS_ERROR
