@@ -232,9 +232,18 @@ def _ensure_sequential_ids(conn: pyodbc.Connection) -> None:
         # SQL Server 2017+ 의 DB 단위 설정. 현재 연결된 DB에 적용된다.
         conn.execute("ALTER DATABASE SCOPED CONFIGURATION SET IDENTITY_CACHE = OFF")
 
-    highest, current = conn.execute(
-        "SELECT ISNULL(MAX(id), 0), IDENT_CURRENT('dbo.documents') FROM dbo.documents"
+    highest, current, row_count = conn.execute(
+        "SELECT ISNULL(MAX(id), 0), IDENT_CURRENT('dbo.documents'), COUNT(*)"
+        " FROM dbo.documents"
     ).fetchone()
+
+    # 빈 테이블에서는 회수할 것이 없다. 그런데도 RESEED 를 걸면 안 된다 --
+    # 한 번도 INSERT 되지 않은 테이블은 RESEED 값을 '다음 값' 으로 쓰기 때문에
+    # (기존 테이블은 값+1 을 쓴다) 첫 문서가 id 0 을 받는다. 새로 만든 DB에서
+    # 실제로 그렇게 되어, 화면에 '#0' 문서가 생겼다.
+    if int(row_count) == 0:
+        return
+
     if int(current) > int(highest):
         conn.execute(
             f"DBCC CHECKIDENT ('dbo.documents', RESEED, {int(highest)}) WITH NO_INFOMSGS"
