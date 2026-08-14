@@ -154,10 +154,22 @@ def _render_detail(doc_id: int) -> None:
                 section="전체 문서", key_prefix=f"docs_report_{doc_id}", doc_id=doc_id
             )
 
-    if st.button("이 문서 삭제", key=f"del{doc_id}"):
-        pipeline.delete_documents([doc_id])
-        _reset_table_selection()
-        st.rerun()
+    # 되돌릴 수 없는 동작이라 한 번 확인받는다. 확인 없이 한 번에 지우고 있었는데,
+    # 상세를 훑다가 잘못 누르면 문서와 원본 파일이 그대로 사라졌다.
+    # 체크박스 다중 삭제(_render_delete)와 같은 방식으로 맞춘다.
+    with st.popover("🗑️ 이 문서 삭제"):
+        st.markdown(
+            f"`#{doc_id}` **{doc['filename']}** 을(를) 삭제합니다. **되돌릴 수 없습니다.**"
+        )
+        st.caption(
+            "문서·품목·검증 오류 기록과 `data/uploads` 의 원본 파일이 함께 지워집니다. "
+            "같은 파일을 다시 올리면 새로 처리됩니다."
+        )
+        if st.button("삭제", type="primary", key=f"confirm_del{doc_id}"):
+            deleted = pipeline.delete_documents([doc_id])
+            _reset_table_selection()
+            st.toast(f"{deleted}건을 삭제했습니다.", icon="🗑️")
+            st.rerun()
 
 
 _HEADER_LABELS = {
