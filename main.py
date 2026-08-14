@@ -7,7 +7,16 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app import config, db, ui_common, ui_documents, ui_review, ui_upload
+from app import (
+    config,
+    db,
+    report,
+    ui_common,
+    ui_documents,
+    ui_report,
+    ui_review,
+    ui_upload,
+)
 
 st.set_page_config(
     page_title="Intelligent Document Verification",
@@ -59,20 +68,29 @@ def main() -> None:
     counts = db.status_counts()
     # 검수 탭은 오류 건과 승인 대기 건을 모두 다룬다. 둘 다 사람 손이 필요한 건이다.
     open_count = counts.get(config.STATUS_ERROR, 0) + counts.get(config.STATUS_PENDING, 0)
-    tab_upload, tab_review, tab_docs = st.tabs(
+    open_reports = report.open_count()
+    tab_upload, tab_review, tab_docs, tab_reports = st.tabs(
         [
             "📥 업로드",
             f"🔍 검수{f' ({open_count})' if open_count else ''}",
             "🗂️ 전체 문서",
+            f"🐞 오류 신고{f' ({open_reports})' if open_reports else ''}",
         ]
     )
 
+    # 화면을 그리다 터지면 Streamlit 은 스택만 뱉고 끝난다. 그것을 캡처해 터미널로
+    # 옮기는 대신, 터진 자리에서 스택을 붙여 바로 신고할 수 있게 감싼다.
     with tab_upload:
-        ui_upload.render()
+        with ui_report.guard("업로드", key="upload"):
+            ui_upload.render()
     with tab_review:
-        ui_review.render()
+        with ui_report.guard("검수", key="review"):
+            ui_review.render()
     with tab_docs:
-        ui_documents.render()
+        with ui_report.guard("전체 문서", key="documents"):
+            ui_documents.render()
+    with tab_reports:
+        ui_report.render_inbox()
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from . import config, db, pipeline
+from . import config, db, pipeline, ui_report
 from .ui_common import field_editor, render_errors, status_badge
 
 
@@ -172,3 +172,17 @@ def _render_document(doc_id: int, *, show_recheck: bool) -> None:
 
     with st.expander("Docling 추출 원문 (Markdown)"):
         st.text(doc.get("markdown") or "(없음)")
+
+    # 오류를 만난 그 자리에서 신고한다. 펼쳤을 때만 폼을 만든다 -- 문서마다 하나씩
+    # 붙는 자리라, 열지도 않은 붙여넣기 컴포넌트를 문서 수만큼 띄우게 된다.
+    reporter = st.expander(
+        "이 화면 오류 신고",
+        icon=":material/bug_report:",
+        on_change="rerun",
+        key=f"report_exp_{doc_id}",
+    )
+    if reporter.open:
+        with reporter:
+            ui_report.report_form(
+                section="검수", key_prefix=f"report_doc{doc_id}", doc_id=doc_id
+            )

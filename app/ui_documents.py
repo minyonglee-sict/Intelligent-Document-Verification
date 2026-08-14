@@ -7,7 +7,7 @@ import json
 import pandas as pd
 import streamlit as st
 
-from . import config, db, pipeline
+from . import config, db, pipeline, ui_report
 from .ui_common import render_errors, status_badge
 
 # 표의 선택 상태는 행 '위치'로 남는다. 문서를 지운 뒤 그대로 두면 같은 위치의
@@ -139,6 +139,20 @@ def _render_detail(doc_id: int) -> None:
 
     with tabs[4]:
         _render_db_record(doc, doc_id)
+
+    # 잘못 뽑힌 값은 승인한 뒤에야 눈에 띄기도 한다. 검수 화면에만 신고를 두면
+    # 이미 승인한 문서는 신고할 길이 없어, 결국 화면을 캡처해 터미널로 옮기게 된다.
+    reporter = st.expander(
+        "이 문서 오류 신고",
+        icon=":material/bug_report:",
+        on_change="rerun",
+        key=f"docs_report_exp_{doc_id}",
+    )
+    if reporter.open:
+        with reporter:
+            ui_report.report_form(
+                section="전체 문서", key_prefix=f"docs_report_{doc_id}", doc_id=doc_id
+            )
 
     if st.button("이 문서 삭제", key=f"del{doc_id}"):
         pipeline.delete_documents([doc_id])

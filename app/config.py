@@ -9,6 +9,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 
+# 화면에서 올린 오류 신고. data/ 아래에 두어 .gitignore 가 그대로 덮는다 --
+# 캡처에는 송장 내용이 찍히므로 저장소로 새어 나가면 안 된다.
+REPORTS_DIR = DATA_DIR / "reports"
+
 # 예전 SQLite 파일. 지금은 MS-SQL로 옮기는 migrate_sqlite_to_mssql.py 에서만 쓴다.
 SQLITE_PATH = DATA_DIR / "documents.db"
 
@@ -88,6 +92,14 @@ STATUS_LABELS = {
 # PROCESSING 상태로 이 시간을 넘긴 행은 중단된 처리로 보고 FAILED로 정리한다.
 # 문서 1건이 최대 3콜 x OLLAMA_TIMEOUT 이므로 그보다 넉넉하게 잡는다.
 STALE_PROCESSING_MINUTES = int(os.getenv("STALE_PROCESSING_MINUTES", "90"))
+
+
+# 신고 첨부로 받을 이미지 확장자. 화면 캡처만 받으면 되므로 문서 형식은 열지 않는다.
+REPORT_IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp"]
+
+# 신고 한 건에 붙일 수 있는 캡처 수. 붙여넣은 이미지는 base64로 브라우저에서
+# 넘어오므로, 무제한으로 열어 두면 한 번의 rerun payload 가 지나치게 커진다.
+MAX_REPORT_IMAGES = 4
 
 
 def ensure_dirs() -> None:
