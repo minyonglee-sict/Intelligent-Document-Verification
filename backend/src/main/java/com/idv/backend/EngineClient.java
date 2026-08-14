@@ -63,8 +63,68 @@ public class EngineClient {
                 .toEntity(String.class);
     }
 
+    /** 이미지처럼 JSON 이 아닌 응답을 그대로 받아 넘긴다. */
+    public ResponseEntity<byte[]> binary(String path) {
+        return client.get()
+                .uri(path)
+                .retrieve()
+                .onStatus(status -> true, (req, res) -> { })
+                .toEntity(byte[].class);
+    }
+
+    /** 오류 신고 접수. 폼 값·붙여넣은 캡처(data URL)·파일을 한 번에 넘긴다. */
+    public ResponseEntity<String> createReport(
+            java.util.Map<String, String> fields,
+            java.util.List<String> pasted,
+            java.util.List<org.springframework.web.multipart.MultipartFile> files)
+            throws java.io.IOException {
+        MultiValueMap<String, Object> form = new LinkedMultiValueMap<>();
+        fields.forEach((key, value) -> {
+            // pasted 는 아래에서 여러 값으로 따로 넣는다.
+            if (!"pasted".equals(key)) {
+                form.add(key, value);
+            }
+        });
+        if (pasted != null) {
+            pasted.forEach(value -> form.add("pasted", value));
+        }
+        if (files != null) {
+            for (org.springframework.web.multipart.MultipartFile file : files) {
+                if (file.isEmpty()) {
+                    continue;
+                }
+                form.add("files", filePart(
+                        file.getOriginalFilename() == null ? "screenshot.png" : file.getOriginalFilename(),
+                        file.getBytes(),
+                        file.getContentType()));
+            }
+        }
+        return client.post()
+                .uri("/reports")
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(form)
+                .retrieve()
+                .onStatus(status -> true, (req, res) -> { })
+                .toEntity(String.class);
+    }
+
+    private HttpEntity<ByteArrayResource> filePart(String filename, byte[] data, String contentType) {
+        ByteArrayResource resource = new ByteArrayResource(data) {
+            @Override
+            public String getFilename() {
+                return filename;
+            }
+        };
+        HttpHeaders headers = new HttpHeaders();
+        if (contentType != null && !contentType.isBlank()) {
+            headers.setContentType(MediaType.parseMediaType(contentType));
+        }
+        return new HttpEntity<>(resource, headers);
+    }
+
     /** 업로드 파일을 multipart 로 엔진에 넘긴다. */
-    public ResponseEntity<String> upload(String filename, byte[] data, String contentType) {
+    public ResponseEntity<String> upload(
+            String filename, byte[] data, String contentType, boolean skipDuplicates) {
         ByteArrayResource resource = new ByteArrayResource(data) {
             @Override
             public String getFilename() {
@@ -84,7 +144,8 @@ public class EngineClient {
         form.add("file", filePart);
 
         return client.post()
-                .uri("/documents")
+                // 엔진 쪽 파라미터 이름은 snake_case 다.
+                .uri("/documents?skip_duplicates=" + skipDuplicates)
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(form)
                 .retrieve()

@@ -74,3 +74,15 @@ export interface RecheckResult {
   errors: ValidationError[]
   critical_count: number
 }
+
+export interface ReportSummary {
+  slug: string
+  number: number
+  status: 'OPEN' | 'RESOLVED'
+  created_at: string
+  section: string
+  document_id: number | null
+  message: string
+  images: string[]
+  exception: string | null
+}

@@ -4,6 +4,7 @@ import type {
   InvoiceFields,
   Job,
   RecheckResult,
+  ReportSummary,
 } from './types'
 
 const BASE = '/api'
@@ -63,10 +64,16 @@ export const api = {
   getMarkdown: (id: number) =>
     request<{ document_id: number; markdown: string }>(`/documents/${id}/markdown`),
 
-  upload: (file: File) => {
+  getDoclingJson: (id: number) =>
+    request<{ document_id: number; docling_json: unknown }>(`/documents/${id}/docling-json`),
+
+  upload: (file: File, skipDuplicates = true) => {
     const form = new FormData()
     form.append('file', file)
-    return request<Job>('/documents', { method: 'POST', body: form })
+    return request<Job>(`/documents?skipDuplicates=${skipDuplicates}`, {
+      method: 'POST',
+      body: form,
+    })
   },
 
   getJob: (jobId: string) => request<Job>(`/jobs/${jobId}`),
@@ -85,6 +92,54 @@ export const api = {
       body: JSON.stringify({ fields, note, force }),
     }),
 
+  bulkApprove: (documentIds: number[]) =>
+    request<{ approved: number; skipped: number[] }>('/documents/bulk-approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ document_ids: documentIds }),
+    }),
+
   remove: (id: number) =>
     request<{ deleted: number }>(`/documents/${id}`, { method: 'DELETE' }),
+
+  bulkDelete: (documentIds: number[]) =>
+    request<{ deleted: number; document_ids: number[] }>('/documents/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ document_ids: documentIds }),
+    }),
+
+  // ---- 오류 신고 ----
+
+  listReports: (scope: 'open' | 'all' = 'all') =>
+    request<ReportSummary[]>(`/reports?scope=${scope}`),
+
+  reportCounts: () => request<{ open: number; total: number }>('/reports/counts'),
+
+  createReport: (input: {
+    message: string
+    section: string
+    documentId?: number
+    attachContext: boolean
+    pasted: string[]
+    files: File[]
+  }) => {
+    const form = new FormData()
+    form.append('message', input.message)
+    form.append('section', input.section)
+    form.append('attach_context', String(input.attachContext))
+    if (input.documentId !== undefined) form.append('document_id', String(input.documentId))
+    // 붙여넣은 캡처는 data URL 문자열로, 고른 파일은 그대로 보낸다.
+    input.pasted.forEach((src) => form.append('pasted', src))
+    input.files.forEach((file) => form.append('files', file))
+    return request<ReportSummary>('/reports', { method: 'POST', body: form })
+  },
+
+  setReportStatus: (slug: string, status: 'OPEN' | 'RESOLVED') =>
+    request<{ slug: string }>(`/reports/${encodeURIComponent(slug)}/status?status=${status}`, {
+      method: 'POST',
+    }),
+
+  deleteReport: (slug: string) =>
+    request<{ deleted: number }>(`/reports/${encodeURIComponent(slug)}`, { method: 'DELETE' }),
 }

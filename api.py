@@ -20,10 +20,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Literal, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from app import config, db, pipeline, validator
+from app import config, db, pipeline, report, validator
 from app.schemas import InvoiceFields
 
 
@@ -205,6 +206,25 @@ def get_markdown(doc_id: int) -> dict[str, Any]:
     return {"document_id": doc_id, "markdown": row.get("markdown") or ""}
 
 
+@app.get("/documents/{doc_id}/docling-json", response_model=dict)
+def get_docling_json(doc_id: int) -> dict[str, Any]:
+    """Docling 원시 출력. 좌표(prov.bbox)가 들어 있어 복원 문제를 볼 때 쓴다.
+
+    DB에는 문자열로 저장되어 있으므로 풀어서 돌려준다. 수 MB가 되기도 해서
+    문서 목록에는 싣지 않고 이 경로로만 낸다.
+    """
+    row = _load(doc_id)
+    raw = row.get("docling_json")
+    if not raw:
+        return {"document_id": doc_id, "docling_json": {}}
+    try:
+        import json as _json
+
+        return {"document_id": doc_id, "docling_json": _json.loads(raw)}
+    except ValueError as exc:
+        raise HTTPException(500, f"Docling JSON 을 해석하지 못했습니다: {exc}")
+
+
 # --------------------------------------------------------------------------
 # 처리 (비동기)
 # --------------------------------------------------------------------------
@@ -354,9 +374,173 @@ def approve(doc_id: int, body: ApproveRequest) -> DocumentDetail:
     return get_document(doc_id)
 
 
+class BulkApproveRequest(BaseModel):
+    document_ids: list[int]
+
+
+@app.post("/documents/bulk-approve", response_model=dict)
+def bulk_approve(body: BulkApproveRequest) -> dict[str, Any]:
+    """검증을 통과해 고칠 것이 없는 건들을 한 번에 마감한다.
+
+    필드는 손대지 않고 상태만 넘긴다. 값을 고쳐야 하는 건(ERROR)은 여기로 오면
+    안 되므로, 넘어온 것 중 PENDING 인 것만 추린다 -- 목록이 갱신되기 전에 눌러
+    ERROR 건이 섞여 들어오는 것을 막는다.
+    """
+    pending = {
+        r["id"] for r in db.list_documents(config.STATUS_PENDING)
+    }
+    targets = [doc_id for doc_id in body.document_ids if doc_id in pending]
+    skipped = [doc_id for doc_id in body.document_ids if doc_id not in pending]
+    return {"approved": db.bulk_approve(targets), "skipped": skipped}
+
+
 @app.delete("/documents/{doc_id}", response_model=dict)
 def delete_document(doc_id: int) -> dict[str, Any]:
     """DB 행과 업로드 원본 파일을 함께 지운다. 되돌릴 수 없다."""
     _load(doc_id)
     deleted = pipeline.delete_documents([doc_id])
     return {"deleted": deleted, "document_id": doc_id}
+
+
+class BulkDeleteRequest(BaseModel):
+    document_ids: list[int]
+
+
+@app.post("/documents/bulk-delete", response_model=dict)
+def bulk_delete(body: BulkDeleteRequest) -> dict[str, Any]:
+    """여러 건을 한 번에 지운다. 되돌릴 수 없다.
+
+    한 건씩 DELETE 를 반복하면 중간에 끊겼을 때 어디까지 지워졌는지 알기 어렵다.
+    파이프라인이 이미 목록을 받으므로 한 번에 넘긴다.
+    """
+    if not body.document_ids:
+        return {"deleted": 0, "document_ids": []}
+    return {
+        "deleted": pipeline.delete_documents(body.document_ids),
+        "document_ids": body.document_ids,
+    }
+
+
+# --------------------------------------------------------------------------
+# 오류 신고
+#
+# 신고는 DB가 아니라 파일로 남는다(app.report). 신고할 고장 중에 DB 연결 실패도
+# 있어서, 저장에 DB가 필요하면 정작 그 고장을 신고할 수 없기 때문이다.
+# --------------------------------------------------------------------------
+
+class ReportSummary(BaseModel):
+    slug: str
+    number: int
+    status: str
+    created_at: str
+    section: str
+    document_id: Optional[int] = None
+    message: str
+    images: list[str] = Field(default_factory=list)
+    exception: Optional[str] = None
+
+
+def _report_model(record: dict[str, Any]) -> ReportSummary:
+    context = record.get("context") or {}
+    return ReportSummary(
+        slug=record.get("slug") or record["path"].name,
+        number=int(record.get("number") or 0),
+        status=record.get("status") or report.STATUS_OPEN,
+        created_at=record.get("created_at") or "",
+        section=record.get("section") or "-",
+        document_id=record.get("document_id"),
+        message=record.get("message") or "",
+        images=list(record.get("images") or []),
+        exception=context.get("exception"),
+    )
+
+
+@app.get("/reports", response_model=list[ReportSummary])
+def list_reports(
+    scope: Literal["open", "all"] = Query(default="all"),
+) -> list[ReportSummary]:
+    records = report.load_all()
+    if scope == "open":
+        records = [r for r in records if r.get("status") == report.STATUS_OPEN]
+    return [_report_model(r) for r in records]
+
+
+@app.get("/reports/counts")
+def report_counts() -> dict[str, int]:
+    records = report.load_all()
+    open_count = sum(1 for r in records if r.get("status") == report.STATUS_OPEN)
+    return {"open": open_count, "total": len(records)}
+
+
+class _UploadShim:
+    """report.create 가 기대하는 모양(.name/.getvalue())으로 감싼다."""
+
+    def __init__(self, name: str, data: bytes) -> None:
+        self.name = name
+        self._data = data
+
+    def getvalue(self) -> bytes:
+        return self._data
+
+
+@app.post("/reports", response_model=ReportSummary, status_code=201)
+async def create_report(
+    message: str = Form(...),
+    section: str = Form(default="일반"),
+    document_id: Optional[int] = Form(default=None),
+    attach_context: bool = Form(default=True),
+    # 브라우저에서 붙여넣은 캡처는 data URL 로 온다. 파일로 고른 것은 multipart.
+    pasted: list[str] = Form(default_factory=list),
+    files: list[UploadFile] = File(default_factory=list),
+) -> ReportSummary:
+    if not message.strip():
+        raise HTTPException(400, "증상을 한 줄이라도 적어야 합니다.")
+
+    context = report.collect_context(document_id if attach_context else None)
+    uploads = [
+        _UploadShim(f.filename or "screenshot.png", await f.read()) for f in files
+    ]
+    folder = report.create(
+        message=message.strip(),
+        section=section,
+        doc_id=document_id,
+        pasted_images=pasted,
+        uploaded_files=uploads,
+        context=context,
+    )
+    for record in report.load_all():
+        if record["path"] == folder:
+            return _report_model(record)
+    raise HTTPException(500, "신고를 저장했지만 다시 읽지 못했습니다.")
+
+
+def _report_folder(slug: str):
+    """slug 로 신고 폴더를 찾는다. data/reports 밖으로 나가는 경로는 막는다."""
+    root = config.REPORTS_DIR.resolve()
+    folder = (config.REPORTS_DIR / slug).resolve()
+    if folder.parent != root or not folder.is_dir():
+        raise HTTPException(404, f"신고 {slug} 을(를) 찾을 수 없습니다.")
+    return folder
+
+
+@app.get("/reports/{slug}/images/{name}")
+def report_image(slug: str, name: str) -> FileResponse:
+    folder = _report_folder(slug)
+    path = (folder / name).resolve()
+    if path.parent != folder or not path.is_file():
+        raise HTTPException(404, "첨부 파일을 찾을 수 없습니다.")
+    return FileResponse(path)
+
+
+@app.post("/reports/{slug}/status", response_model=dict)
+def set_report_status(slug: str, status: Literal["OPEN", "RESOLVED"]) -> dict[str, Any]:
+    _report_folder(slug)
+    if not report.set_status(slug, status):
+        raise HTTPException(404, f"신고 {slug} 을(를) 찾을 수 없습니다.")
+    return {"slug": slug, "status": status}
+
+
+@app.delete("/reports/{slug}", response_model=dict)
+def delete_report(slug: str) -> dict[str, Any]:
+    _report_folder(slug)
+    return {"deleted": report.delete([slug]), "slug": slug}

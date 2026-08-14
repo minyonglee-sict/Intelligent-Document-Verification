@@ -3,6 +3,8 @@ package com.idv.backend;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -70,9 +73,17 @@ public class DocumentController {
         return passThrough(engine.forward(HttpMethod.GET, "/documents/" + id + "/markdown"));
     }
 
+    /** Docling 원시 출력. 수 MB 가 되기도 하므로 필요할 때만 부른다. */
+    @GetMapping("/documents/{id}/docling-json")
+    public ResponseEntity<String> doclingJson(@PathVariable long id) {
+        return passThrough(engine.forward(HttpMethod.GET, "/documents/" + id + "/docling-json"));
+    }
+
     /** 업로드는 접수만 하고 작업 번호를 돌려준다. 처리는 엔진에서 이어진다. */
     @PostMapping(value = "/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<String> upload(@RequestParam("file") MultipartFile file)
+    public ResponseEntity<String> upload(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(name = "skipDuplicates", defaultValue = "true") boolean skipDuplicates)
             throws IOException {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest()
@@ -83,7 +94,8 @@ public class DocumentController {
         return passThrough(engine.upload(
                 (filename == null || filename.isBlank()) ? "document.pdf" : filename,
                 file.getBytes(),
-                file.getContentType()));
+                file.getContentType(),
+                skipDuplicates));
     }
 
     @GetMapping("/jobs/{jobId}")
@@ -113,8 +125,68 @@ public class DocumentController {
         return passThrough(engine.forward(HttpMethod.POST, "/documents/" + id + "/approve", body));
     }
 
+    /** 검증을 통과한 건들을 한 번에 마감한다. 엔진이 PENDING 인 것만 추린다. */
+    @PostMapping(value = "/documents/bulk-approve", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> bulkApprove(@RequestBody String body) {
+        return passThrough(engine.forward(HttpMethod.POST, "/documents/bulk-approve", body));
+    }
+
     @DeleteMapping("/documents/{id}")
     public ResponseEntity<String> delete(@PathVariable long id) {
         return passThrough(engine.forward(HttpMethod.DELETE, "/documents/" + id));
+    }
+
+    /** 여러 건을 한 번에 지운다. 되돌릴 수 없으므로 화면이 먼저 확인받는다. */
+    @PostMapping(value = "/documents/bulk-delete", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> bulkDelete(@RequestBody String body) {
+        return passThrough(engine.forward(HttpMethod.POST, "/documents/bulk-delete", body));
+    }
+
+    // ----------------------------------------------------------------------
+    // 오류 신고. 파일로 남으므로 DB 가 죽어 있어도 접수된다.
+    // ----------------------------------------------------------------------
+
+    @GetMapping("/reports")
+    public ResponseEntity<String> reports(
+            @RequestParam(defaultValue = "all") String scope) {
+        return passThrough(engine.forward(
+                HttpMethod.GET, "/reports?scope=" + URLEncoder.encode(scope, StandardCharsets.UTF_8)));
+    }
+
+    @GetMapping("/reports/counts")
+    public ResponseEntity<String> reportCounts() {
+        return passThrough(engine.forward(HttpMethod.GET, "/reports/counts"));
+    }
+
+    /** 캡처는 multipart 로, 붙여넣은 이미지는 data URL 문자열로 함께 온다. */
+    @PostMapping(value = "/reports", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<String> createReport(
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            @RequestParam Map<String, String> fields,
+            @RequestParam(value = "pasted", required = false) List<String> pasted)
+            throws IOException {
+        return passThrough(engine.createReport(fields, pasted, files));
+    }
+
+    @GetMapping("/reports/{slug}/images/{name}")
+    public ResponseEntity<byte[]> reportImage(
+            @PathVariable String slug, @PathVariable String name) {
+        return engine.binary("/reports/" + enc(slug) + "/images/" + enc(name));
+    }
+
+    @PostMapping("/reports/{slug}/status")
+    public ResponseEntity<String> reportStatus(
+            @PathVariable String slug, @RequestParam String status) {
+        return passThrough(engine.forward(
+                HttpMethod.POST, "/reports/" + enc(slug) + "/status?status=" + enc(status)));
+    }
+
+    @DeleteMapping("/reports/{slug}")
+    public ResponseEntity<String> deleteReport(@PathVariable String slug) {
+        return passThrough(engine.forward(HttpMethod.DELETE, "/reports/" + enc(slug)));
+    }
+
+    private static String enc(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
     }
 }

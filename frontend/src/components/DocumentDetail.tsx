@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
 import type { DocumentDetail as Detail, InvoiceFields, ValidationError } from '../types'
 import { FieldEditor } from './FieldEditor'
+import { ReportForm } from './ReportPanel'
 
 /**
  * 문서 한 건의 상세: 검증 오류 + 값 편집 + 재검증 + 승인.
@@ -11,13 +12,9 @@ import { FieldEditor } from './FieldEditor'
  */
 
 function Issues({ errors }: { errors: ValidationError[] }) {
-  const open = errors.filter((e) => !e.resolved)
-  if (open.length === 0) {
-    return <div className="notice ok">미해결 검증 오류가 없습니다.</div>
-  }
   return (
     <>
-      {open.map((e, i) => (
+      {errors.map((e, i) => (
         <div key={i} className={`issue ${e.severity === 'warning' ? 'warning' : ''}`}>
           {e.severity === 'warning' ? '⚠️' : '🚨'} {e.message}
           <br />
@@ -31,9 +28,12 @@ function Issues({ errors }: { errors: ValidationError[] }) {
 interface Props {
   documentId: number
   onChanged: () => void
+  /** 승인이 끝나면 알린다. 승인한 문서는 검수 목록에서 빠지므로 이 패널이
+   *  곧 사라진다 -- 완료 안내는 부모가 띄워야 남는다. */
+  onApproved?: (id: number) => void
 }
 
-export function DocumentDetailPanel({ documentId, onChanged }: Props) {
+export function DocumentDetailPanel({ documentId, onChanged, onApproved }: Props) {
   const [detail, setDetail] = useState<Detail | null>(null)
   const [fields, setFields] = useState<InvoiceFields | null>(null)
   const [note, setNote] = useState('')
@@ -60,6 +60,8 @@ export function DocumentDetailPanel({ documentId, onChanged }: Props) {
   }, [documentId])
 
   if (!detail || !fields) return <div className="panel muted">불러오는 중…</div>
+
+  const openErrors = detail.errors.filter((e) => !e.resolved)
 
   const reload = async () => {
     const fresh = await api.getDocument(documentId)
@@ -92,9 +94,10 @@ export function DocumentDetailPanel({ documentId, onChanged }: Props) {
     setFlash(null)
     try {
       await api.approve(documentId, fields, note || null, forcing)
-      await reload()
       setForcing(false)
       setFlash({ kind: 'ok', text: `문서 #${documentId} 를 승인했습니다.` })
+      onApproved?.(documentId)
+      await reload()
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         setForcing(true)
@@ -139,8 +142,14 @@ export function DocumentDetailPanel({ documentId, onChanged }: Props) {
       {detail.failure_reason && <div className="notice err">{detail.failure_reason}</div>}
       {flash && <div className={`notice ${flash.kind}`}>{flash.text}</div>}
 
-      <h2>검증 오류</h2>
-      <Issues errors={detail.errors} />
+      {/* 오류가 없으면 구역째 내리지 않는다. 위의 상태 뱃지가 이미 통과를
+          말하고 있어서, '미해결 오류가 없습니다' 는 같은 말을 한 번 더 하는 것이다. */}
+      {openErrors.length > 0 && (
+        <>
+          <h2>검증 오류 <span className="muted small" style={{ fontWeight: 400 }}>{openErrors.length}건</span></h2>
+          <Issues errors={openErrors} />
+        </>
+      )}
 
       <h2 style={{ marginTop: 20 }}>추출 결과 수정</h2>
       <FieldEditor fields={fields} onChange={setFields} disabled={busy} />
@@ -151,9 +160,17 @@ export function DocumentDetailPanel({ documentId, onChanged }: Props) {
       </label>
 
       <div className="row" style={{ marginTop: 12 }}>
-        <button className="btn" onClick={doRecheck} disabled={busy}>재검증</button>
+        {/* 검증을 통과한 건은 고칠 것이 없으므로 재검증을 내지 않는다.
+            Streamlit ui_review 의 show_recheck 와 같은 판단이다. */}
+        {detail.status !== 'PENDING' && (
+          <button className="btn" onClick={doRecheck} disabled={busy}>재검증</button>
+        )}
         <button className="btn primary" onClick={doApprove} disabled={busy}>
-          {forcing ? '오류가 남아 있지만 승인' : '승인 → VALIDATED'}
+          {forcing
+            ? '오류가 남아 있지만 승인'
+            : detail.status === 'PENDING'
+              ? '승인 → VALIDATED'
+              : '수정 후 승인 → VALIDATED'}
         </button>
         <span style={{ flex: 1 }} />
         <button className="btn danger" onClick={doDelete} disabled={busy}>문서 삭제</button>
@@ -162,6 +179,14 @@ export function DocumentDetailPanel({ documentId, onChanged }: Props) {
       <details className="raw" style={{ marginTop: 18 }} onToggle={loadMarkdown}>
         <summary>Docling 추출 원문 (Markdown)</summary>
         <pre>{markdown ?? '불러오는 중…'}</pre>
+      </details>
+
+      {/* 오류를 만난 그 자리에서 신고한다. 문서 맥락이 자동으로 붙는다. */}
+      <details className="report" style={{ marginTop: 10 }}>
+        <summary>🐞 이 화면 오류 신고</summary>
+        <div className="report-body">
+          <ReportForm documentId={documentId} section="검수" onCreated={() => {}} />
+        </div>
       </details>
     </div>
   )
