@@ -4,3 +4,8 @@ ollama>=0.4
 pydantic>=2.0
 pandas>=2.0
 pyodbc>=5.0
+
+# HTTP API (api.py). React/Java 스택과 MCP 서버가 이 진입점을 쓴다.
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
