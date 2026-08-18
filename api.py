@@ -24,6 +24,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, 
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+import chat_bridge
 from app import config, db, pipeline, report, validator
 from app.schemas import InvoiceFields
 
@@ -34,7 +35,18 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # 처리 도중 프로세스가 죽으면 PROCESSING 행이 남아 같은 파일의 재업로드를
     # 영원히 막는다. 화면 진입 때와 같은 정리를 여기서도 한 번 돌린다.
     db.cleanup_stale_processing()
+
+    # MCP 연결은 앱이 사는 동안 하나만 유지한다. 요청마다 새로 붙으면 그때마다
+    # 파이썬 프로세스가 떠서 질문 하나에 수 초가 걸린다. 붙지 못해도 API 는 떠야
+    # 한다 -- 채팅만 못 쓰고 나머지 경로는 그대로 돈다.
+    try:
+        await chat_bridge.bridge.start()
+    except Exception:
+        pass
+
     yield
+
+    await chat_bridge.bridge.stop()
 
 
 app = FastAPI(
@@ -419,6 +431,67 @@ def bulk_delete(body: BulkDeleteRequest) -> dict[str, Any]:
         "deleted": pipeline.delete_documents(body.document_ids),
         "document_ids": body.document_ids,
     }
+
+
+# --------------------------------------------------------------------------
+# 화면에서 MCP 도구 쓰기
+#
+# 사용자는 한국말로 묻고, LLM 이 어떤 도구를 부를지 골라 실행한 뒤 답을 만든다.
+# 실제 루프는 chat_bridge 에 있다.
+# --------------------------------------------------------------------------
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    question: str
+    # 대화 기록은 화면이 들고 보낸다. 서버는 상태를 갖지 않는다.
+    history: list[ChatTurn] = Field(default_factory=list)
+
+
+class ChatToolCall(BaseModel):
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    result: str = ""
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    tool_calls: list[ChatToolCall] = Field(default_factory=list)
+    rounds: int = 0
+
+
+@app.get("/chat/tools", response_model=dict)
+def chat_tools() -> dict[str, Any]:
+    """채팅이 쓸 수 있는 MCP 도구 목록. 연결 상태 확인에도 쓴다."""
+    return {
+        "connected": chat_bridge.bridge.session is not None,
+        "model": config.OLLAMA_MODEL,
+        "tools": [
+            {
+                "name": t["function"]["name"],
+                "description": t["function"]["description"].splitlines()[0],
+            }
+            for t in chat_bridge.bridge.tools
+        ],
+    }
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(body: ChatRequest) -> ChatResponse:
+    """질문 하나에 답한다. 어떤 도구를 거쳤는지도 함께 돌려준다."""
+    if not body.question.strip():
+        raise HTTPException(400, "질문이 비어 있습니다.")
+    if chat_bridge.bridge.session is None:
+        raise HTTPException(503, "MCP 서버에 연결되어 있지 않습니다. 엔진을 다시 시작하세요.")
+
+    result = await chat_bridge.answer(
+        body.question.strip(),
+        [turn.model_dump() for turn in body.history],
+    )
+    return ChatResponse(**result)
 
 
 # --------------------------------------------------------------------------

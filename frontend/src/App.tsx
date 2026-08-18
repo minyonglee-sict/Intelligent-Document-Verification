@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api'
+import { ChatPanel } from './components/ChatPanel'
 import { DocumentsPanel } from './components/DocumentsPanel'
 import { ReportPanel } from './components/ReportPanel'
 import { ReviewPanel } from './components/ReviewPanel'
@@ -8,7 +9,7 @@ import { UploadPanel } from './components/UploadPanel'
 import type { DocumentSummary } from './types'
 import './styles.css'
 
-type Tab = 'upload' | 'review' | 'documents' | 'reports'
+type Tab = 'upload' | 'review' | 'documents' | 'reports' | 'chat'
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('upload')
@@ -49,6 +50,7 @@ export default function App() {
     { key: 'review', label: '🔍 검수', badge: openCount },
     { key: 'documents', label: '🗂️ 전체 문서' },
     { key: 'reports', label: '🐞 오류 신고', badge: openReports },
+    { key: 'chat', label: '💬 물어보기' },
   ]
 
   return (
@@ -81,6 +83,7 @@ export default function App() {
 
         {tab === 'upload' && <UploadPanel onFinished={refresh} />}
         {tab === 'reports' && <ReportPanel />}
+        {tab === 'chat' && <ChatPanel />}
 
         {tab === 'review' && (
           <ReviewPanel rows={rows} onChanged={refresh} onNotice={setFlash} />

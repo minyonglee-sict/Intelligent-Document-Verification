@@ -3,6 +3,8 @@ import type {
   DocumentSummary,
   InvoiceFields,
   Job,
+  ChatResponse,
+  ChatTurn,
   RecheckResult,
   ReportSummary,
 } from './types'
@@ -107,6 +109,20 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ document_ids: documentIds }),
+    }),
+
+  // ---- 화면에서 MCP 도구 쓰기 ----
+
+  chatTools: () =>
+    request<{ connected: boolean; model: string; tools: { name: string; description: string }[] }>(
+      '/chat/tools',
+    ),
+
+  chat: (question: string, history: ChatTurn[]) =>
+    request<ChatResponse>('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, history }),
     }),
 
   // ---- 오류 신고 ----

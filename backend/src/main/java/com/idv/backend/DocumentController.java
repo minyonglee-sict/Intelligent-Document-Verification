@@ -143,6 +143,28 @@ public class DocumentController {
     }
 
     // ----------------------------------------------------------------------
+    // 화면에서 MCP 도구 쓰기. 실제 루프(LLM <-> MCP)는 엔진 쪽에 있다.
+    // ----------------------------------------------------------------------
+
+    /** 채팅이 쓸 수 있는 도구 목록. 연결 상태 확인에도 쓴다. */
+    @GetMapping("/chat/tools")
+    public ResponseEntity<String> chatTools() {
+        return passThrough(engine.forward(HttpMethod.GET, "/chat/tools"));
+    }
+
+    /**
+     * 질문 하나를 넘기고 답을 받는다.
+     *
+     * <p>LLM 이 도구를 여러 번 부를 수 있어 수십 초가 걸리기도 한다. 업로드처럼
+     * 접수만 하고 끝낼 수도 있지만, 채팅은 답을 기다리는 것이 자연스러우므로
+     * 그대로 붙들고 있는다 -- 대신 엔진 호출 제한시간을 넉넉히 잡아 두었다.
+     */
+    @PostMapping(value = "/chat", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> chat(@RequestBody String body) {
+        return passThrough(engine.forward(HttpMethod.POST, "/chat", body));
+    }
+
+    // ----------------------------------------------------------------------
     // 오류 신고. 파일로 남으므로 DB 가 죽어 있어도 접수된다.
     // ----------------------------------------------------------------------
 

@@ -86,3 +86,20 @@ export interface ReportSummary {
   images: string[]
   exception: string | null
 }
+
+export interface ChatTurn {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface ChatToolCall {
+  name: string
+  arguments: Record<string, unknown>
+  result: string
+}
+
+export interface ChatResponse {
+  answer: string
+  tool_calls: ChatToolCall[]
+  rounds: number
+}

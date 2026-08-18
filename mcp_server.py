@@ -68,10 +68,14 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
 
 @mcp.tool()
 def list_documents(status: Optional[str] = None, limit: int = 50) -> dict[str, Any]:
-    """저장된 문서 목록.
+    """업로드된 송장·영수증 문서의 목록.
+
+    '오류 난 문서', '검수할 문서', '승인 대기' 를 물으면 이 도구를 쓴다.
+    사용자가 올린 버그 신고를 찾는 list_reports 와 혼동하지 말 것.
 
     Args:
-        status: ERROR / PENDING / VALIDATED / FAILED / PROCESSING. 비우면 전체.
+        status: ERROR(검증 오류) / PENDING(승인 대기) / VALIDATED(승인 완료) /
+                FAILED(처리 실패) / PROCESSING. 비우면 전체.
         limit: 최대 건수 (기본 50).
     """
     try:
@@ -282,7 +286,10 @@ def parse_table(markdown: str) -> dict[str, Any]:
 
 @mcp.tool()
 def list_reports(scope: str = "open") -> dict[str, Any]:
-    """화면에서 올라온 오류 신고 목록.
+    """사용자가 화면에서 직접 접수한 버그 신고(불만 접수) 목록.
+
+    사람이 '이 화면이 이상하다' 며 캡처와 함께 올린 것이다.
+    문서의 검증 오류와는 전혀 다르다 -- 그쪽은 list_documents(status='ERROR') 다.
 
     Args:
         scope: open(미처리) 또는 all(전체).
