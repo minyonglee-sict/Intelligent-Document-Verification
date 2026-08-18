@@ -19,7 +19,10 @@ SQLITE_PATH = DATA_DIR / "documents.db"
 # MS SQL Server
 MSSQL_DRIVER = os.getenv("MSSQL_DRIVER", "ODBC Driver 18 for SQL Server")
 MSSQL_SERVER = os.getenv("MSSQL_SERVER", r"localhost\SQLEXPRESS")
-MSSQL_DATABASE = os.getenv("MSSQL_DATABASE", "DocumentVerification")
+# 기본값을 개발용 DB로 둔다. 원본(DocumentVerification)은 전환 작업 중 건드리지 않는
+# 사본으로 남겨 두고, Streamlit·HTTP API·MCP 가 모두 이 하나를 본다 -- 화면마다 다른
+# DB를 보면 같은 문서가 다르게 보인다. 원본이 필요하면 MSSQL_DATABASE 로 명시한다.
+MSSQL_DATABASE = os.getenv("MSSQL_DATABASE", "DocumentVerification_Dev")
 # 둘 다 비어 있으면 Windows 인증(Trusted_Connection)을 쓴다.
 MSSQL_USER = os.getenv("MSSQL_USER", "")
 MSSQL_PASSWORD = os.getenv("MSSQL_PASSWORD", "")

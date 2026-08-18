@@ -7,13 +7,13 @@
     코드를 고치고 그 계층만 재시작하는 실수가 난다 -- Java 를 재시작하지 않아 새로 만든
     경로가 404 로 나오는 일이 실제로 있었다. 그래서 항상 셋을 함께 다시 세운다.
 
-    엔진은 개발용 DB 를 본다. Streamlit(main.py)은 원본 DB 를 그대로 쓰므로 이 스크립트와
-    무관하게 계속 돌아도 된다.
+    이제 Streamlit·HTTP API·MCP 가 모두 같은 DB(config 기본값)를 본다. 화면마다 다른
+    DB를 보면 같은 문서가 다르게 보이기 때문이다. -Database 는 그 기본값을 덮어쓴다.
 
 .EXAMPLE
     .\dev.ps1              # 셋 다 재시작
     .\dev.ps1 -Stop        # 셋 다 종료
-    .\dev.ps1 -Database DocumentVerification    # 원본 DB 로 띄우기(주의)
+    .\dev.ps1 -Database DocumentVerification    # 이관 전 원본 DB 로 띄우기(읽기 전용으로만)
 #>
 param(
     [switch]$Stop,

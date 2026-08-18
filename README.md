@@ -46,7 +46,7 @@ Streamlit 검수 화면 (ERROR / PENDING) → 수정 → 승인 → status='VALI
 유형에 따라 같은 컬럼의 이름이 달라집니다 (`invoice_number` → 송장 번호 / 영수증 번호).
 `DOC_TYPE_LABELS` 에 표기를 모아 두었습니다.
 
-기본 접속은 `localhost\SQLEXPRESS` / `DocumentVerification` / Windows 인증입니다.
+기본 접속은 `localhost\SQLEXPRESS` / `DocumentVerification_Dev` / Windows 인증입니다.
 DB가 없으면 앱 시작 시 `db.init_db()`가 만듭니다.
 
 송장 값은 JSON 덩어리가 아니라 **실제 컬럼**입니다. `json_extract` 없이 바로
@@ -230,7 +230,7 @@ python run_pipeline.py data\uploads\*.pdf --force   # 중복 해시도 다시 �
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `MSSQL_SERVER` | `localhost\SQLEXPRESS` | SQL Server 인스턴스 |
-| `MSSQL_DATABASE` | `DocumentVerification` | 데이터베이스명 (없으면 생성) |
+| `MSSQL_DATABASE` | `DocumentVerification_Dev` | 데이터베이스명 (없으면 생성) |
 | `MSSQL_DRIVER` | `ODBC Driver 18 for SQL Server` | ODBC 드라이버 |
 | `MSSQL_USER` / `MSSQL_PASSWORD` | (비움) | 비우면 Windows 인증 |
 | `OLLAMA_MODEL` | `qwen2.5:7b` | 추출·검증에 쓸 모델 |
