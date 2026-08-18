@@ -9,3 +9,6 @@ pyodbc>=5.0
 fastapi>=0.115
 uvicorn>=0.30
 python-multipart>=0.0.9
+
+# MCP 서버 (mcp_server.py). 조회·진단 도구를 MCP 클라이언트에 낸다.
+mcp>=2.0
