@@ -1,0 +1,76 @@
+name: CI
+
+# 세 계층(엔진/백엔드/화면)을 각각 검증한다. dev.ps1 이 로컬에서 셋을 함께
+# 띄우는 이유와 같은 이유로, 여기서도 하나만 검사하면 나머지 둘이 깨진 채
+# 넘어갈 수 있다.
+#
+# 자동 배포(CD)는 아직 없다. 배포할 서버/컨테이너 인프라 자체가 정해지지
+# 않아서, 대상 없는 배포 자동화는 의미가 없다. 정해지면 이 파일에 deploy
+# job 을 추가한다.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  frontend:
+    name: 화면 (lint · 타입체크 · 빌드)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc -b --noEmit
+      - run: npm run build
+
+  backend:
+    name: 백엔드 (Java 컴파일 · 테스트)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - run: ./mvnw -B test
+
+  engine:
+    name: 엔진 (Python 문법 · 의존성 · 임포트)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      # pyodbc 는 C 확장이라 unixODBC 헤더가 있어야 빌드된다 -- 없으면
+      # requirements.txt 설치 자체가 실패한다(GitHub 기본 러너엔 없음).
+      - name: pyodbc 빌드 의존성 설치
+        run: sudo apt-get update && sudo apt-get install -y unixodbc-dev
+      - run: pip install -r requirements.txt
+      - name: 문법 검사 (모든 .py)
+        run: >
+          python -m compileall -q
+          app api.py mcp_server.py chat_bridge.py main.py
+          run_pipeline.py migrate_sqlite_to_mssql.py
+      # 자동 테스트가 아직 없어서(pytest 스위트 미구축), DB·Ollama 연결 없이도
+      # 안전하게 임포트되는 모듈만 실제로 불러와 본다 -- import 시점에 깨진
+      # 참조(존재하지 않는 함수를 부르는 등)가 있으면 여기서 걸린다.
+      - name: 순수 모듈 임포트 확인
+        run: >
+          python -c "import app.config, app.db, app.schemas, app.validator,
+          app.table_parser, app.layout_recovery, app.report, app.pipeline, app.extractor"
