@@ -65,6 +65,9 @@ Field guidance:
 - buyer_name: the party the invoice is addressed to ("TO:", "BILL TO:").
 - subtotal / tax / shipping / total_amount: the summary rows at the bottom of the
   table ("SUBTOTAL", "SALES TAX", "SHIPPING & HANDLING", "TOTAL DUE").
+- tax: a money amount, never a percentage. Documents often print BOTH a "Tax rate"
+  (e.g. "10%") and a separate "Tax amount"/"Tax" line (e.g. "865") — use the money
+  amount. If only a rate is printed and no amount, return "".
 """
 
 ITEMS_SYSTEM = _EXTRACT_BASE + """

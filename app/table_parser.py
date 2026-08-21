@@ -140,10 +140,18 @@ def _iter_tables(markdown: str):
 
 
 def map_columns(header: list[str]) -> dict[str, int]:
-    """헤더 문자열로 열 위치를 추정한다. description 과 amount 가 필수다."""
+    """헤더 문자열로 열 위치를 추정한다. description 과 amount 가 필수다.
+
+    완전히 일치하는 열을 부분 일치보다 먼저 본다. 'Product ID' 는 'product' 를
+    부분적으로 담고 있어 품목명 단서에 걸리지만, 정작 품목명 열은 따로 있는
+    'Description' 이다 -- 부분 일치만으로 왼쪽부터 고르면 'Description' 보다
+    앞에 있는 'Product ID' 를 먼저 집어 진짜 품목명 열을 놓친다(invoice-8-3.pdf).
+    """
     mapping: dict[str, int] = {}
     taken: set[int] = set()
     for field, hints in COLUMN_HINTS:
+        exact: Optional[int] = None
+        partial: Optional[int] = None
         for idx, name in enumerate(header):
             if idx in taken:
                 continue
@@ -152,10 +160,15 @@ def map_columns(header: list[str]) -> dict[str, int]:
             # 'item' 단서에 걸려 진짜 품목명 열을 놓친다.
             if field == "description" and low.rstrip(":") in ROW_NUMBER_NAMES:
                 continue
-            if any(h in low for h in hints):
-                mapping[field] = idx
-                taken.add(idx)
-                break
+            stripped = low.rstrip(":")
+            if exact is None and stripped in hints:
+                exact = idx
+            elif partial is None and any(h in low for h in hints):
+                partial = idx
+        chosen = exact if exact is not None else partial
+        if chosen is not None:
+            mapping[field] = chosen
+            taken.add(chosen)
     return mapping
 
 
@@ -595,8 +608,11 @@ def parse_line_items(markdown: str) -> list[LineItem]:
             data_rows = _merge_spilled_text(rows, mapping)
         elif active is not None and _looks_like_data(header, active) and len(header) == max(active.values()) + 1:
             # 앞 표와 같은 모양으로 이어지는 조각. 헤더 자리의 행도 데이터다.
+            # 앞 조각과 똑같이 남는 글자 열(품번 등)을 합쳐야, 표가 페이지 넘어가며
+            # 쪼개져도 품목명 모양이 앞뒤 조각에서 갈라지지 않는다(invoice-8-3.pdf:
+            # 앞 조각은 '품번 + 설명', 이 병합이 없으면 뒤 조각은 '설명'만 남았다).
             mapping = active
-            data_rows = [header, *rows]
+            data_rows = _merge_spilled_text([header, *rows], mapping)
         elif active is not None:
             # 헤더 자리에 데이터도 아닌 엉뚱한 행이 온 조각.
             # 품목 표를 이미 한 번 만난 뒤에만 시도해, 주소·날짜 표를 잘못
@@ -612,7 +628,7 @@ def parse_line_items(markdown: str) -> list[LineItem]:
             if "description" not in mapping:
                 continue
             active = mapping
-            data_rows = candidate_rows
+            data_rows = _merge_spilled_text(candidate_rows, mapping)
         else:
             continue
 
