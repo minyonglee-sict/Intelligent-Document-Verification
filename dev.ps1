@@ -42,6 +42,21 @@ function Stop-Idv {
             try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch { }
         }
     }
+
+    # 안의 프로세스만 죽이면, 그걸 담고 있던 -NoExit 창은 안 닫힌 채로 남는다
+    # (-NoExit 은 명령이 끝나거나 죽어도 창을 계속 띄워 둔다). 이걸 안 하면 dev.ps1
+    # 을 돌릴 때마다 빈 창이 3개씩 쌓인다.
+    #
+    # MainWindowTitle 로 찾으려 했으나 이 환경(Windows Terminal)에서는 항상 비어
+    # 있었다 -- Windows Terminal 이 콘솔 창을 대신 소유해서, 그 밑의 powershell.exe
+    # 프로세스 자체는 창 핸들이 없다. 대신 우리가 실행할 때 넘긴 명령줄
+    # ("WindowTitle = 'IDV ...'")은 그대로 남으므로 그걸로 찾는다.
+    $found = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*WindowTitle = 'IDV *" }
+    foreach ($w in $found) {
+        Write-Host ("  창 닫기 (PID {0})" -f $w.ProcessId)
+        try { Stop-Process -Id $w.ProcessId -Force -ErrorAction Stop } catch { }
+    }
 }
 
 function Wait-Port {
