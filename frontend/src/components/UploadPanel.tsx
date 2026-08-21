@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { api } from '../api'
 import type { Job } from '../types'
 
@@ -21,10 +21,17 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-export function UploadPanel({ onFinished }: { onFinished: () => void }) {
+interface Props {
+  onFinished: () => void
+  /** App 이 들고 있는 상태다 -- 업로드 탭을 벗어났다 돌아와도 처리 중 목록이
+   *  안 사라지도록, 이 컴포넌트 자체의 useState 로 두지 않는다. */
+  jobs: Job[]
+  setJobs: Dispatch<SetStateAction<Job[]>>
+}
+
+export function UploadPanel({ onFinished, jobs, setJobs }: Props) {
   const [files, setFiles] = useState<File[]>([])
   const [skipDuplicates, setSkipDuplicates] = useState(true)
-  const [jobs, setJobs] = useState<Job[]>([])
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -51,7 +58,7 @@ export function UploadPanel({ onFinished }: { onFinished: () => void }) {
       if (justFinished) onFinished()
     }, 3000)
     return () => clearInterval(timer)
-  }, [jobs, pending, onFinished])
+  }, [jobs, pending, onFinished, setJobs])
 
   const addFiles = (picked: FileList | null) => {
     if (!picked?.length) return
@@ -99,11 +106,6 @@ export function UploadPanel({ onFinished }: { onFinished: () => void }) {
   return (
     <div className="panel">
       <h2>문서 업로드</h2>
-      <p className="muted small" style={{ margin: '0 0 10px' }}>
-        송장·영수증 파일을 아래 영역에 끌어다 놓거나 선택하세요. Docling으로 텍스트를 추출한 뒤
-        품목 표는 파서가, 머리말은 Ollama가 읽고, 규칙으로 검증해 MS-SQL에 저장합니다.
-        PDF 외에 Word·PowerPoint·Excel·이미지도 읽습니다.
-      </p>
 
       <div
         className={`dropzone ${dragOver ? 'over' : ''}`}
@@ -111,7 +113,20 @@ export function UploadPanel({ onFinished }: { onFinished: () => void }) {
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files) }}
       >
+        {/* label 로 감싸면 클릭했을 때 자바스크립트 없이도 파일 선택창이 열린다.
+            input 자체는 브라우저 기본 모양이 못생겨서 화면 밖으로 숨기고, 여기
+            보이는 아이콘·문구로 대신한다. */}
+        <label className="dropzone-label" htmlFor="upload-input">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+            <path d="M7 9l5-5 5 5" />
+            <path d="M12 4v12" />
+          </svg>
+          <div className="dropzone-title">클릭하거나 파일을 끌어다 놓으세요</div>
+          <div className="dropzone-sub">PDF · Word · PowerPoint · Excel · 이미지 (여러 개 가능)</div>
+        </label>
         <input
+          id="upload-input"
           ref={inputRef}
           type="file"
           multiple
