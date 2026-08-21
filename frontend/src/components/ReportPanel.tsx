@@ -149,7 +149,12 @@ function ReportForm({
   )
 }
 
-export function ReportPanel() {
+interface ReportPanelProps {
+  /** 미처리 건수가 바뀔 때(처리 완료·다시 열기·삭제) 상단 탭 배지도 새로 고치라고 부모에 알린다. */
+  onChanged?: () => void
+}
+
+export function ReportPanel({ onChanged }: ReportPanelProps) {
   const [reports, setReports] = useState<ReportSummary[]>([])
   const [scope, setScope] = useState<'open' | 'all'>('open')
   const [openForm, setOpenForm] = useState(false)
@@ -163,12 +168,14 @@ export function ReportPanel() {
   const setStatus = async (slug: string, status: 'OPEN' | 'RESOLVED') => {
     await api.setReportStatus(slug, status)
     load()
+    onChanged?.()
   }
 
   const remove = async (slug: string) => {
     if (!confirm('이 신고를 지웁니다. 캡처 파일까지 함께 지워지며 되돌릴 수 없습니다.')) return
     await api.deleteReport(slug)
     load()
+    onChanged?.()
   }
 
   return (
@@ -185,7 +192,7 @@ export function ReportPanel() {
         </button>
         {openForm && (
           <div style={{ marginTop: 12 }}>
-            <ReportForm section="일반" onCreated={() => { load(); setOpenForm(false) }} />
+            <ReportForm section="일반" onCreated={() => { load(); setOpenForm(false); onChanged?.() }} />
           </div>
         )}
       </div>
