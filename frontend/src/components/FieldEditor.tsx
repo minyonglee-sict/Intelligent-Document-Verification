@@ -57,8 +57,9 @@ export function FieldEditor({ fields, onChange, disabled }: Props) {
   const removeRow = (index: number) =>
     onChange({ ...fields, line_items: fields.line_items.filter((_, i) => i !== index) })
 
+  // id 는 검증 오류 쪽(field-${key})과 맞춰 둔다 -- 오류를 클릭하면 여기로 스크롤한다.
   const text = (label: string, key: keyof InvoiceFields) => (
-    <label className="field">
+    <label className="field" id={`field-${key}`}>
       <span>{label}</span>
       <input
         value={(fields[key] as string | null) ?? ''}
@@ -69,7 +70,7 @@ export function FieldEditor({ fields, onChange, disabled }: Props) {
   )
 
   const num = (label: string, key: keyof InvoiceFields) => (
-    <label className="field">
+    <label className="field" id={`field-${key}`}>
       <span>{label}</span>
       <input
         className="num"
@@ -106,7 +107,8 @@ export function FieldEditor({ fields, onChange, disabled }: Props) {
         {text('발주 번호', 'po_number')}
       </div>
 
-      <h3 style={{ fontSize: '.9rem', margin: '14px 0 6px' }}>품목</h3>
+      {/* id 는 행 단위가 아닌 품목 오류(예: 품목 합계 vs 공급가액)가 걸리는 자리다. */}
+      <h3 id="field-line_items" style={{ fontSize: '.9rem', margin: '14px 0 6px' }}>품목</h3>
       <table>
         <thead>
           <tr>
@@ -121,7 +123,9 @@ export function FieldEditor({ fields, onChange, disabled }: Props) {
         </thead>
         <tbody>
           {fields.line_items.map((item, index) => (
-            <tr key={index}>
+            // 검증 오류는 문서에 적힌 품목 번호(position)로 행을 가리킨다. 없으면
+            // 표에서의 순번(1부터)을 쓴다 -- validator.rule_check 와 같은 규칙이다.
+            <tr key={index} id={`field-line_items-${item.position ?? index + 1}`}>
               <td className="num muted">{item.position ?? ''}</td>
               <td>
                 <input
