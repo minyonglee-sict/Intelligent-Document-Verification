@@ -17,6 +17,12 @@ export function SettingsModal({ open, onClose, env }: Props) {
   const [checked, setChecked] = useState<{ ok: boolean; text: string; which: string } | null>(null)
   const [busy, setBusy] = useState(false)
 
+  const [currentPw, setCurrentPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [newPw2, setNewPw2] = useState('')
+  const [pwNotice, setPwNotice] = useState<{ ok: boolean; text: string } | null>(null)
+  const [pwBusy, setPwBusy] = useState(false)
+
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -41,6 +47,27 @@ export function SettingsModal({ open, onClose, env }: Props) {
 
   const dbLine = env?.database?.split('\n')[0] ?? '확인 중…'
   const modelLine = env?.ollama?.split('\n')[0] ?? '확인 중…'
+
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setPwNotice(null)
+    if (newPw !== newPw2) {
+      setPwNotice({ ok: false, text: '새 비밀번호가 서로 다릅니다.' })
+      return
+    }
+    setPwBusy(true)
+    try {
+      await api.changePassword(currentPw, newPw)
+      setPwNotice({ ok: true, text: '비밀번호를 바꿨습니다. 다른 기기·브라우저에 남아 있던 로그인은 모두 해제됩니다.' })
+      setCurrentPw('')
+      setNewPw('')
+      setNewPw2('')
+    } catch (err) {
+      setPwNotice({ ok: false, text: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setPwBusy(false)
+    }
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -75,6 +102,51 @@ export function SettingsModal({ open, onClose, env }: Props) {
             {checked.text}
           </div>
         )}
+
+        <hr style={{ margin: '1.4rem 0', border: 'none', borderTop: '1px solid var(--line)' }} />
+
+        <h2 style={{ fontSize: '1rem', margin: '0 0 .8rem' }}>비밀번호 변경</h2>
+        <form onSubmit={changePassword}>
+          <label className="field">
+            <span>현재 비밀번호</span>
+            <input
+              type="password"
+              value={currentPw}
+              onChange={(e) => setCurrentPw(e.target.value)}
+              autoComplete="current-password"
+            />
+          </label>
+          <label className="field">
+            <span>새 비밀번호</span>
+            <input
+              type="password"
+              value={newPw}
+              onChange={(e) => setNewPw(e.target.value)}
+              autoComplete="new-password"
+            />
+          </label>
+          <label className="field">
+            <span>새 비밀번호 확인</span>
+            <input
+              type="password"
+              value={newPw2}
+              onChange={(e) => setNewPw2(e.target.value)}
+              autoComplete="new-password"
+            />
+          </label>
+
+          {pwNotice && (
+            <div className={`notice ${pwNotice.ok ? 'ok' : 'err'} small`}>{pwNotice.text}</div>
+          )}
+
+          <button
+            className="btn primary"
+            type="submit"
+            disabled={pwBusy || !currentPw || !newPw || !newPw2}
+          >
+            {pwBusy ? '변경 중…' : '비밀번호 변경'}
+          </button>
+        </form>
       </div>
     </div>
   )

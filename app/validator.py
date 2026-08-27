@@ -218,12 +218,20 @@ def to_number(raw: str | None) -> Optional[float]:
         return None
 
 
-def extract_fields(markdown: str) -> tuple[InvoiceFields, list[ValidationIssue]]:
+def extract_fields(
+    markdown: str, header_hint: str = ""
+) -> tuple[InvoiceFields, list[ValidationIssue]]:
     """머리말/합계와 품목 표를 각각 따로 뽑아 하나로 합친다.
 
     추출 도중 생긴 문제(품목 호출 실패·응답 잘림)는 검증 오류로 함께 돌려준다.
+
+    header_hint: layout_recovery.recover_header_hints() 가 만든 참고 자료(대부분
+    빈 문자열). LLM에게 넘길 텍스트에만 얹고, doc_type 분류(classify_document)는
+    원문(markdown) 그대로 본다 -- 힌트가 분류 판단에 섞이면 안 된다.
     """
     document = _truncate(markdown)
+    if header_hint:
+        document = f"{header_hint}\n{document}"
 
     raw_header = RawHeader.model_validate(
         _chat_json(

@@ -108,8 +108,15 @@ def process_pdf(
             f"추출 실패: {exc}",
         )
 
+    # 라벨과 값이 같은 줄이었는데 Docling이 칸(열) 단위로 읽어 떨어뜨린 문서라면,
+    # 좌표 기준으로 다시 짝지은 참고 자료를 만든다. 그런 문제가 없는 문서는 빈
+    # 문자열이라 아래 extract_fields 호출에 아무 영향도 없다.
+    header_hint = layout_recovery.recover_header_hints(extraction.docling_json)
+
     try:
-        fields, extraction_issues = validator.extract_fields(extraction.markdown)
+        fields, extraction_issues = validator.extract_fields(
+            extraction.markdown, header_hint
+        )
     except Exception as exc:
         return fail(f"LLM 필드 추출 실패: {exc}", f"LLM 추출 실패: {exc}", extraction)
 

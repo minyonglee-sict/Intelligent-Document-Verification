@@ -1,4 +1,6 @@
 import type {
+  AdminUser,
+  AuthUser,
   DocumentDetail,
   DocumentSummary,
   InvoiceFields,
@@ -7,9 +9,11 @@ import type {
   ChatTurn,
   RecheckResult,
   ReportSummary,
+  Role,
 } from './types'
 
 const BASE = '/api'
+const TOKEN_KEY = 'docverify_token'
 
 /** 백엔드가 4xx/5xx 를 돌려줬을 때, 본문에 담긴 사유를 그대로 들고 올라간다. */
 export class ApiError extends Error {
@@ -25,8 +29,34 @@ export class ApiError extends Error {
   }
 }
 
+/** 로그인 토큰. localStorage 가 막혀 있어도(사생활 보호 모드 등) 로그인 자체는
+ *  되게, 저장 실패는 조용히 삼킨다 -- 대신 새로고침하면 다시 로그인해야 한다. */
+export function getToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    // 무시 -- 위 주석 참고.
+  }
+}
+
+/** 세션이 만료·무효화되어 401 을 받으면 쏜다. App 이 이걸 듣고 로그인 화면으로 돌린다. */
+const UNAUTHORIZED_EVENT = 'docverify:unauthorized'
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${BASE}${path}`, init)
+  const headers = new Headers(init?.headers)
+  const token = getToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  const response = await fetch(`${BASE}${path}`, { ...init, headers })
   const text = await response.text()
   let body: unknown = null
   if (text) {
@@ -38,6 +68,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
+    // 로그인 자체의 401(아이디·비밀번호 오류)과 비밀번호 변경의 401(현재 비밀번호
+    // 오류)은 세션 만료가 아니다 -- 세션은 멀쩡한데 튕겨낼 이유가 없다.
+    const isAuthCheck401 = path === '/auth/login' || path === '/auth/change-password'
+    if (response.status === 401 && !isAuthCheck401) {
+      setToken(null)
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+    }
     // 엔진은 사유를 detail 에 담는다. 승인 거절(409)은 detail 이 객체다.
     const detail = (body as { detail?: unknown })?.detail
     const message =
@@ -51,8 +88,69 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
+export function onUnauthorized(handler: () => void): () => void {
+  window.addEventListener(UNAUTHORIZED_EVENT, handler)
+  return () => window.removeEventListener(UNAUTHORIZED_EVENT, handler)
+}
+
 export const api = {
   health: () => request<{ ok: boolean; database: string; ollama: string }>('/health'),
+
+  // ---- 로그인 ----
+
+  login: (username: string, password: string) =>
+    request<{ token: string } & AuthUser>('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    }),
+
+  signup: (input: { username: string; displayName: string; password: string }) =>
+    request<{ token: string } & AuthUser>('/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: input.username,
+        display_name: input.displayName,
+        password: input.password,
+      }),
+    }),
+
+  logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+
+  me: () => request<AuthUser>('/auth/me'),
+
+  forgotPassword: (username: string, message: string) =>
+    request<{ ok: boolean }>('/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, message }),
+    }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
+
+  // ---- 사용자 관리 (관리자 전용) ----
+
+  adminListUsers: () => request<AdminUser[]>('/admin/users'),
+
+  adminSetRole: (userId: number, role: Role) =>
+    request<AdminUser>(`/admin/users/${userId}/role`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    }),
+
+  adminResetPassword: (userId: number, newPassword: string) =>
+    request<{ ok: boolean }>(`/admin/users/${userId}/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_password: newPassword }),
+    }),
 
   listDocuments: (status?: string) =>
     request<DocumentSummary[]>(

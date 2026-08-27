@@ -110,6 +110,44 @@ SCHEMA_STATEMENTS = [
     " CREATE INDEX idx_errors_document ON dbo.validation_errors(document_id)",
     "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='idx_line_items_document')"
     " CREATE INDEX idx_line_items_document ON dbo.line_items(document_id, position)",
+    """
+    IF OBJECT_ID('dbo.users', 'U') IS NULL
+    CREATE TABLE dbo.users (
+        id             INT IDENTITY(1,1) PRIMARY KEY,
+        username       NVARCHAR(100) NOT NULL UNIQUE,
+        display_name   NVARCHAR(200) NOT NULL,
+        password_hash  NVARCHAR(200) NOT NULL,
+        password_salt  NVARCHAR(64)  NOT NULL,
+        role           NVARCHAR(20)  NOT NULL DEFAULT 'user',
+        created_at     NVARCHAR(32)  NOT NULL
+    )
+    """,
+    """
+    IF OBJECT_ID('dbo.sessions', 'U') IS NULL
+    CREATE TABLE dbo.sessions (
+        token       NVARCHAR(64) PRIMARY KEY,
+        user_id     INT NOT NULL REFERENCES dbo.users(id) ON DELETE CASCADE,
+        created_at  NVARCHAR(32) NOT NULL,
+        expires_at  NVARCHAR(32) NOT NULL
+    )
+    """,
+    "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name='idx_sessions_user')"
+    " CREATE INDEX idx_sessions_user ON dbo.sessions(user_id)",
+    """
+    IF OBJECT_ID('dbo.jobs', 'U') IS NULL
+    CREATE TABLE dbo.jobs (
+        job_id           NVARCHAR(32)  PRIMARY KEY,
+        state            NVARCHAR(20)  NOT NULL,
+        filename         NVARCHAR(400) NOT NULL,
+        document_id      INT,
+        document_status  NVARCHAR(20),
+        error_count      INT           NOT NULL DEFAULT 0,
+        skipped          BIT           NOT NULL DEFAULT 0,
+        message          NVARCHAR(MAX) NOT NULL DEFAULT '',
+        started_at       NVARCHAR(32)  NOT NULL,
+        finished_at      NVARCHAR(32)
+    )
+    """,
 ]
 
 
@@ -187,6 +225,7 @@ def _add_missing_columns(conn: pyodbc.Connection) -> None:
     wanted = {
         "documents": HEADER_COLUMNS,
         "line_items": [("tax", "FLOAT")],
+        "users": [("role", "NVARCHAR(20) NOT NULL DEFAULT 'user'")],
     }
     for table, columns in wanted.items():
         existing = {
@@ -502,7 +541,7 @@ def delete_documents(doc_ids: list[int]) -> int:
 def list_documents(status: Optional[str] = None) -> list[dict[str, Any]]:
     sql = (
         "SELECT id, filename, status, is_valid, page_count, model, failure_reason,"
-        "       created_at, updated_at, validated_at"
+        "       doc_type, created_at, updated_at, validated_at"
         "  FROM dbo.documents"
     )
     params: tuple = ()
@@ -595,3 +634,188 @@ def load_fields(row: dict[str, Any]) -> InvoiceFields:
         return InvoiceFields(**header, line_items=items)
     except Exception:
         return InvoiceFields()
+
+
+# --------------------------------------------------------------------------
+# 로그인 / 계정
+#
+# 계정은 두 갈래로 생긴다: 관리자가 create_user.py 로 직접 만들거나, 누구나
+# 화면 가입으로 만든다 -- 단, 가입으로 만든 계정은 항상 role='user' 다.
+# 관리자(role='admin')는 create_user.py --admin 이나, 이미 있는 관리자가
+# 화면(사용자 관리)에서 승격시켜야만 생긴다. 비밀번호 해시 계산은 app.auth 가
+# 하고, 여기는 그 결과를 저장·조회만 한다.
+# --------------------------------------------------------------------------
+
+def create_user(
+    username: str,
+    display_name: str,
+    password_hash: str,
+    password_salt: str,
+    role: str = "user",
+) -> int:
+    with connect() as conn:
+        row = _one(
+            conn.execute(
+                "INSERT INTO dbo.users (username, display_name, password_hash, password_salt,"
+                " role, created_at) OUTPUT INSERTED.id VALUES (?,?,?,?,?,?)",
+                username,
+                display_name,
+                password_hash,
+                password_salt,
+                role,
+                _now(),
+            )
+        )
+    return int(row["id"])
+
+
+def get_user_by_username(username: str) -> Optional[dict[str, Any]]:
+    with connect(autocommit=True) as conn:
+        return _one(conn.execute("SELECT * FROM dbo.users WHERE username=?", username))
+
+
+def list_users() -> list[dict[str, Any]]:
+    """비밀번호 해시·salt 는 빼고 돌려준다 -- 화면(사용자 관리)에 그대로 보낼 목록이다."""
+    with connect(autocommit=True) as conn:
+        return _rows(
+            conn.execute(
+                "SELECT id, username, display_name, role, created_at"
+                "  FROM dbo.users ORDER BY id"
+            )
+        )
+
+
+def count_admins(exclude_user_id: Optional[int] = None) -> int:
+    """마지막 남은 관리자를 강등시키지 않게 막을 때 쓴다."""
+    with connect(autocommit=True) as conn:
+        if exclude_user_id is None:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM dbo.users WHERE role='admin'"
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM dbo.users WHERE role='admin' AND id<>?",
+                exclude_user_id,
+            ).fetchone()
+    return int(row[0])
+
+
+def set_user_role(user_id: int, role: str) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE dbo.users SET role=? WHERE id=?", role, user_id)
+
+
+def admin_reset_password(user_id: int, password_hash: str, password_salt: str) -> None:
+    """관리자가 다른 사람의 비밀번호를 강제로 바꾼다 -- 세션은 전부(현재 세션
+    포함) 지운다. 본인이 자기 비밀번호를 바꿀 때(change_password)와 달리, 여기는
+    "내가 지금 쓰던 세션"이라는 개념이 없다 -- 관리자와 대상자는 다른 사람이다.
+    """
+    with connect() as conn:
+        conn.execute(
+            "UPDATE dbo.users SET password_hash=?, password_salt=? WHERE id=?",
+            password_hash, password_salt, user_id,
+        )
+        conn.execute("DELETE FROM dbo.sessions WHERE user_id=?", user_id)
+
+
+def change_password(user_id: int, password_hash: str, password_salt: str, keep_token: str) -> None:
+    """비밀번호를 바꾸고, 지금 쓰고 있는 세션(keep_token) 말고는 전부 로그아웃시킨다.
+
+    비밀번호를 바꾸는 이유가 "누가 내 계정을 쓰고 있는 것 같다"인 경우가 흔하다
+    -- 그 세션들을 그대로 살려두면 바꾼 의미가 없다. 지금 이 요청을 보낸 세션까지
+    지우면 바꾸자마자 자기도 튕겨나가니, 그것만 남긴다.
+    """
+    with connect() as conn:
+        conn.execute(
+            "UPDATE dbo.users SET password_hash=?, password_salt=? WHERE id=?",
+            password_hash, password_salt, user_id,
+        )
+        conn.execute(
+            "DELETE FROM dbo.sessions WHERE user_id=? AND token<>?",
+            user_id, keep_token,
+        )
+
+
+def create_session(user_id: int, token: str, ttl_hours: int) -> None:
+    ts = _now()
+    expires = (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).isoformat(
+        timespec="seconds"
+    )
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO dbo.sessions (token, user_id, created_at, expires_at)"
+            " VALUES (?,?,?,?)",
+            token,
+            user_id,
+            ts,
+            expires,
+        )
+
+
+def get_session_user(token: str) -> Optional[dict[str, Any]]:
+    """토큰이 유효(존재 + 안 만료)하면 사용자 행을 돌려준다.
+
+    타임스탬프는 항상 _now() 로 만든 UTC ISO 문자열이라 사전식 비교가 시간
+    순서와 일치한다 -- cleanup_stale_processing 이 쓰는 것과 같은 방식이다.
+    """
+    with connect(autocommit=True) as conn:
+        row = _one(
+            conn.execute(
+                "SELECT u.id, u.username, u.display_name, u.role, s.expires_at"
+                "  FROM dbo.sessions s JOIN dbo.users u ON u.id = s.user_id"
+                " WHERE s.token=?",
+                token,
+            )
+        )
+    if not row or row["expires_at"] < _now():
+        return None
+    return row
+
+
+def delete_session(token: str) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM dbo.sessions WHERE token=?", token)
+
+
+# --------------------------------------------------------------------------
+# 문서 처리 작업 (큐)
+#
+# api.py(발행)와 worker.py(소비)는 서로 다른 프로세스라 파이썬 메모리를 공유하지
+# 못한다. 그래서 작업 상태를 DB에 둔다 -- 예전에는 api.py 프로세스 메모리의
+# 딕셔너리 하나였는데, 그러면 엔진을 재시작하거나 워커를 여러 대로 늘렸을 때
+# 상태가 안 보이거나 사라진다.
+# --------------------------------------------------------------------------
+
+def create_job(job_id: str, filename: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO dbo.jobs (job_id, state, filename, started_at)"
+            " VALUES (?,?,?,?)",
+            job_id, "QUEUED", filename, _now(),
+        )
+
+
+def update_job(job_id: str, **fields: Any) -> None:
+    """넘긴 필드만 갱신한다. state 를 DONE/FAILED 로 바꿀 때는 finished_at 도 같이 준다."""
+    if not fields:
+        return
+    assignments = ", ".join(f"{name}=?" for name in fields)
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE dbo.jobs SET {assignments} WHERE job_id=?",
+            *fields.values(), job_id,
+        )
+
+
+def get_job(job_id: str) -> Optional[dict[str, Any]]:
+    with connect(autocommit=True) as conn:
+        return _one(conn.execute("SELECT * FROM dbo.jobs WHERE job_id=?", job_id))
+
+
+def list_jobs(limit: int = 200) -> list[dict[str, Any]]:
+    with connect(autocommit=True) as conn:
+        return _rows(
+            conn.execute(
+                f"SELECT TOP {int(limit)} * FROM dbo.jobs ORDER BY started_at DESC"
+            )
+        )

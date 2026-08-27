@@ -1,0 +1,124 @@
+# 학습용 첫 컴포즈 구성. dev.ps1 이 로컬에서 띄우던 것과 같은 조합(엔진+워커+백엔드+화면)
+# 에 MS SQL Server, RabbitMQ 를 컨테이너로 더했다.
+#
+# 실행 전에 꼭:
+#   1) .env.example 을 .env 로 복사하고 값을 채운다 (.env 는 .gitignore 에 있음)
+#   2) .\dev.ps1 -Stop 으로 로컬 스택을 꺼둔다 -- 포트(8000/8080/5672)가 겹친다
+#   3) Ollama 는 컨테이너로 안 옮겼다. 이미 D드라이브에 받아둔 모델을 다시 받게
+#      하지 않으려고, 호스트에서 그대로 돌아가는 Ollama를 host.docker.internal 로
+#      부르게 했다 -- 그러니 `ollama serve` 는 평소처럼 호스트에서 켜져 있어야 한다.
+#
+# 실행:  docker compose up --build
+# 첫 실행 시 MS SQL Server가 뜨는 데 20~30초 정도 걸린다 -- healthcheck가 준비될
+# 때까지 engine/worker는 기다렸다가 시작한다.
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      # 안 걸어두면 버퍼풀이 남는 메모리를 계속 끌어다 쓴다(호스트가 16GB면 금방
+      # vmmemWSL 혼자 5GB 이상을 먹는다). sp_configure 'max server memory'와 같다.
+      MSSQL_MEMORY_LIMIT_MB: "2048"
+    mem_limit: 2560m   # 위 SQL Server 내부 상한(2048MB) + 프로세스 오버헤드 여유분
+    restart: unless-stopped
+    ports:
+      - "1433:1433"   # SSMS 등으로 직접 붙어서 들여다보고 싶을 때용. 안 써도 무방.
+    volumes:
+      - mssql_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # 관리 화면 (guest/guest) -- http://localhost:15672
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  engine:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"   # 직접 http://localhost:8000/docs 로 스웨거 문서 보고 싶을 때용
+    environment:
+      MSSQL_SERVER: mssql
+      MSSQL_DATABASE: DocumentVerification_Dev
+      MSSQL_USER: sa
+      MSSQL_PASSWORD: ${MSSQL_SA_PASSWORD}
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      OLLAMA_HOST: http://host.docker.internal:11434
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      ADMIN_CONTACT_EMAIL: ${ADMIN_CONTACT_EMAIL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # 리눅스 컨테이너에서도 호스트를 이 이름으로 찾게 함
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      mssql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["python", "worker.py"]
+    # RabbitMQ가 healthcheck를 통과한 직후에도 AMQP 쪽은 순간적으로 안 붙는 경우가
+    # 있다(실제로 겪음: worker.py가 연결 실패로 죽어버리고 재시도 로직이 없어서
+    # 그대로 멈춰 있었다). 재시작 정책으로 다시 붙게 한다 -- 근본적으로는
+    # worker.py/app/mq.py에 재연결 루프를 넣는 게 맞지만, 그건 dev.ps1 로컬
+    # 흐름도 같이 쓰는 코드라 여기서 건드리지 않는다.
+    restart: unless-stopped
+    environment:
+      MSSQL_SERVER: mssql
+      MSSQL_DATABASE: DocumentVerification_Dev
+      MSSQL_USER: sa
+      MSSQL_PASSWORD: ${MSSQL_SA_PASSWORD}
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2F
+      OLLAMA_HOST: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      - docling_cache:/root/.cache   # Docling/HF 모델을 재빌드할 때마다 새로 안 받게
+    depends_on:
+      mssql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    ports:
+      - "8080:8080"
+    depends_on:
+      - engine
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "8081:80"   # 로컬 vite 개발 서버(5173)와 겹치지 않게 다른 포트로 열었다
+    depends_on:
+      - backend
+
+volumes:
+  mssql_data:
+  rabbitmq_data:
+  docling_cache:

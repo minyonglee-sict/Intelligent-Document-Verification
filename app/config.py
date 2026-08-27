@@ -96,6 +96,39 @@ STATUS_LABELS = {
 # 문서 1건이 최대 3콜 x OLLAMA_TIMEOUT 이므로 그보다 넉넉하게 잡는다.
 STALE_PROCESSING_MINUTES = int(os.getenv("STALE_PROCESSING_MINUTES", "90"))
 
+# 로그인 세션 유효기간(시간). 검수 업무는 하루 종일 화면을 붙들고 있는 경우가
+# 많아서 넉넉히 잡는다 -- 너무 짧으면 검수 도중 로그아웃되어 입력하던 값을 잃는다.
+SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "12"))
+
+# 계정 역할. 가입 화면은 항상 ROLE_USER 로만 만든다 -- 관리자는 create_user.py나
+# 이미 있는 관리자가 화면에서 승격시켜야만 생긴다(가입 화면에서 스스로 고를 수
+# 있으면, 아무나 체크 한 번으로 관리자가 되는 구멍이 생긴다).
+ROLE_ADMIN = "admin"
+ROLE_USER = "user"
+ROLE_LABELS = {ROLE_ADMIN: "관리자", ROLE_USER: "일반 사용자"}
+
+
+# RabbitMQ (문서 처리 큐). api.py는 여기 발행만 하고, worker.py 가 실제 처리를 한다.
+# 잡 상태를 프로세스 메모리가 아니라 DB(dbo.jobs)에 두는 이유도 같다 -- api.py와
+# worker.py는 서로 다른 프로세스라 메모리를 공유하지 못한다.
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/%2F")
+DOCUMENT_QUEUE = os.getenv("DOCUMENT_QUEUE", "document_jobs")
+
+# 메일 발송(app/mailer.py). SMTP_USER/SMTP_PASSWORD 가 비어 있으면(기본값)
+# mailer.send_email 이 명확한 오류를 낸다 -- 조용히 안 보내고 넘어가면 "보낸 줄
+# 알았는데 안 갔다"가 된다. Gmail 이면 계정 비밀번호가 아니라 "앱 비밀번호"를
+# 써야 한다(2단계 인증 켜야 발급됨).
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("SMTP_FROM", "") or SMTP_USER
+# 발신자 표시 이름. 생짜 이메일 주소만 뜨는 것보다 자동 발송 티가 덜 나서,
+# 스팸함으로 분류될 확률을 조금이라도 낮춘다.
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Intelligent Document Verification")
+
+# 비밀번호 재설정 요청을 받을 관리자 주소.
+ADMIN_CONTACT_EMAIL = os.getenv("ADMIN_CONTACT_EMAIL", "my.lee@sictglobal.com")
 
 # 신고 첨부로 받을 이미지 확장자. 화면 캡처만 받으면 되므로 문서 형식은 열지 않는다.
 REPORT_IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp"]

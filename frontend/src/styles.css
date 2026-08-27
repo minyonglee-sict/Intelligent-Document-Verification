@@ -13,9 +13,10 @@
   --text: #111827;
   --muted: #6b7280;
 
-  --accent: #3558d4;       /* 강조색 -- 버튼·링크·활성 탭·포커스 */
-  --accent-soft: #eaf0fe;
-  --accent-line: #c7d7fb;
+  --accent: #1c4a68;       /* 강조색 -- 버튼·링크·활성 탭·포커스. 흔한 SaaS 인디고 대신
+                               장부·만년필 잉크를 닮은 딥블루를 쓴다 */
+  --accent-soft: #e6eef2;
+  --accent-line: #b9d0dc;
 
   --critical: #dc2626;
   --critical-bg: #fef2f2;
@@ -35,7 +36,7 @@
 
   --font-body: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont,
     'Malgun Gothic', system-ui, sans-serif;
-  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
 
   --radius: 10px;
   --radius-sm: 6px;
@@ -61,14 +62,23 @@ body { margin: 0; background: var(--bg); }
 /* 2단 구성. 사이드바와 본문을 같은 흰 배경으로 통일하고, 세로 실선 하나로만 나눈다. */
 .layout { display: grid; grid-template-columns: 268px minmax(0, 1fr); min-height: 100vh; }
 
-.sidebar { background: var(--sidebar-bg); border-right: 1px solid var(--line); }
-.sidebar-inner { position: sticky; top: 0; padding: 1.8rem 1.4rem 2rem; }
+.sidebar {
+  display: flex; flex-direction: column;
+  background: var(--sidebar-bg); border-right: 1px solid var(--line);
+}
+.sidebar-inner { position: sticky; top: 0; padding: 1.8rem 1.4rem 2rem; flex: 1; }
 .sidebar h2 {
-  font-size: .8rem; font-weight: 700; margin: 0 0 .8rem;
+  font-size: .8rem; font-weight: 700; margin: 0 0 .5rem;
   color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
 }
 .sidebar hr { border: none; border-top: 1px solid var(--line); margin: 1.4rem 0; }
 .sidebar .btn.wide { width: 100%; margin-bottom: .6rem; }
+
+.sidebar-brand { margin-bottom: 1.6rem; }
+.sidebar-brand-name {
+  font-size: 1.05rem; font-weight: 800; letter-spacing: .02em; color: var(--accent);
+}
+.sidebar-brand-sub { font-size: .78rem; color: var(--muted); margin-top: .15rem; }
 
 .env { margin: 0 0 1.1rem; }
 .env dt { font-size: .8rem; color: var(--muted); margin-top: .55rem; }
@@ -79,17 +89,78 @@ body { margin: 0; background: var(--bg); }
   padding: .1rem .35rem; border-radius: 4px;
 }
 
+/* 상태별 문서 현황 -- 카드 배경 없이 한 줄에 라벨·숫자를 나란히 둔다.
+   숫자 자체를 상태색으로 물들여서, 점 하나에 의존하지 않고도 한눈에 읽히게 한다. */
 .stat {
-  padding: .7rem .8rem; margin-bottom: .6rem;
-  background: var(--panel); border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .4rem 0; margin-bottom: .1rem;
 }
 .stat .label {
-  display: flex; align-items: center; font-size: .82rem; color: var(--muted); font-weight: 500;
+  display: flex; align-items: center; font-size: .85rem; color: var(--text); font-weight: 500;
 }
 .stat .value {
-  font-size: 1.7rem; font-weight: 700; line-height: 1.3;
-  font-variant-numeric: tabular-nums; margin-top: .1rem;
+  font-family: var(--font-mono); font-size: 1rem; font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
+.stat .value.ERROR { color: var(--critical); }
+.stat .value.PENDING { color: var(--warn); }
+.stat .value.VALIDATED { color: var(--ok); }
+.stat .value.FAILED { color: var(--neutral); }
+
+/* 실제로 존재하는 화면 두 곳으로 가는 지름길 -- 사이드바 하단. */
+.sidebar-nav { display: flex; flex-direction: column; gap: .2rem; }
+.sidebar-nav button {
+  display: flex; align-items: center; gap: .55rem;
+  width: 100%; text-align: left; font: inherit; font-size: .9rem; font-weight: 500;
+  padding: .55rem .6rem; border: none; border-radius: var(--radius-sm);
+  background: none; color: var(--text); cursor: pointer;
+}
+.sidebar-nav button:hover { background: var(--panel); }
+.sidebar-nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+
+/* 로그인한 사람 -- 사이드바 맨 아래 항상 고정. */
+.sidebar-user {
+  position: sticky; bottom: 0; flex: none;
+  display: flex; align-items: center; gap: .6rem;
+  padding: .9rem 1.4rem; border-top: 1px solid var(--line);
+  background: var(--sidebar-bg);
+}
+.sidebar-user-avatar {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 2rem; height: 2rem; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: .85rem;
+}
+.sidebar-user-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.sidebar-user-name {
+  font-size: .85rem; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-user-id { font-size: .74rem; color: var(--muted); }
+.sidebar-user-logout {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 1.8rem; height: 1.8rem; border-radius: 50%; border: 1px solid var(--line);
+  background: #fff; color: var(--muted); cursor: pointer; font-size: .95rem;
+}
+.sidebar-user-logout:hover { border-color: var(--critical); color: var(--critical); background: var(--critical-bg); }
+
+/* 로그인 화면 */
+.login-screen {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--bg); padding: 1.5rem;
+}
+.login-card {
+  width: 100%; max-width: 22rem; padding: 2.2rem 2rem;
+  background: #fff; border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .04);
+}
+.login-brand { text-align: center; margin-bottom: 1.8rem; }
+.login-card button.btn.primary { width: 100%; margin-top: .4rem; }
+.login-footnote { text-align: center; margin: .9rem 0 0; }
+.login-link {
+  border: none; background: none; padding: 0; margin: 0; cursor: pointer;
+  font: inherit; font-size: inherit; color: var(--accent); font-weight: 600;
+}
+.login-link:hover { text-decoration: underline; }
 
 /* 상태 표식 — 사이드바 현황의 색 점. */
 .dot {
@@ -113,8 +184,8 @@ body { margin: 0; background: var(--bg); }
 header { margin-bottom: 1.6rem; }
 .header-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 header h1 {
-  font-size: 1.6rem; font-weight: 700; margin: 0;
-  letter-spacing: -.01em; line-height: 1.3;
+  font-size: 1.6rem; font-weight: 800; margin: 0;
+  letter-spacing: -.02em; line-height: 1.3;
 }
 header .subtitle { margin: .3rem 0 0; color: var(--muted); font-size: .875rem; }
 
@@ -127,17 +198,17 @@ header .subtitle { margin: .3rem 0 0; color: var(--muted); font-size: .875rem; }
 .icon-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .icon-btn svg { width: 1.1rem; height: 1.1rem; }
 
-/* 파이프라인 단계 표시줄 */
-.steps { display: flex; align-items: flex-start; margin-top: 1.3rem; }
-.step { display: flex; flex-direction: column; align-items: center; text-align: center; width: 8.4rem; }
+/* 파이프라인 단계 표시줄 -- 원 + 라벨이 한 줄로, 원 사이를 선으로 잇는다. */
+.steps { display: flex; align-items: center; margin-top: 1.3rem; }
+.step { display: flex; align-items: center; gap: .55rem; flex: none; }
 .step-dot {
-  width: 1.7rem; height: 1.7rem; border-radius: 50%;
-  background: var(--panel); border: 1.5px solid var(--line);
-  color: var(--muted); font-size: .8rem; font-weight: 700;
+  width: 1.6rem; height: 1.6rem; border-radius: 50%; flex: none;
+  background: var(--accent); border: none;
+  color: #fff; font-size: .78rem; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
 }
-.step-label { margin-top: .5rem; font-size: .78rem; color: var(--muted); line-height: 1.35; }
-.step-line { flex: 1; height: 1.5px; background: var(--line); margin-top: .85rem; min-width: 1rem; }
+.step-label { font-size: .85rem; color: var(--text); font-weight: 500; white-space: nowrap; }
+.step-line { flex: 1; height: 1px; background: var(--line); margin: 0 .9rem; min-width: 1.2rem; }
 
 /* 탭 */
 .tabs { display: flex; gap: 1.6rem; border-bottom: 1px solid var(--line); margin-bottom: 1.7rem; }
@@ -162,11 +233,12 @@ header .subtitle { margin: .3rem 0 0; color: var(--muted); font-size: .875rem; }
 /* 지표 */
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin: 1rem 0 1.4rem; }
 .metric {
-  padding: .9rem 1rem; background: var(--panel); border-radius: var(--radius);
+  padding: 1.25rem 1rem; background: var(--panel); border-radius: 24px;
+  box-shadow: 0 .5px .5px rgba(0, 0, 0, .1);
 }
 .metric .label { font-size: .82rem; color: var(--muted); }
 .metric .value {
-  font-size: 1.85rem; font-weight: 700; line-height: 1.3;
+  font-family: var(--font-mono); font-size: 1.7rem; font-weight: 600; line-height: 1.3;
   font-variant-numeric: tabular-nums; margin-top: .15rem;
 }
 
@@ -175,7 +247,7 @@ header .subtitle { margin: .3rem 0 0; color: var(--muted); font-size: .875rem; }
   border: 1.5px solid var(--accent-line); border-radius: var(--radius);
   background: var(--accent-soft);
 }
-.dropzone.over { border-color: var(--accent); background: #dfe9fd; }
+.dropzone.over { border-color: var(--accent); background: #d3e3ea; }
 .dropzone-label {
   display: flex; flex-direction: column; align-items: center; text-align: center;
   padding: 2.2rem 1.5rem; cursor: pointer;
@@ -201,7 +273,15 @@ header .subtitle { margin: .3rem 0 0; color: var(--muted); font-size: .875rem; }
 }
 .badge.ERROR      { color: var(--critical); background: var(--critical-bg); }
 .badge.PENDING    { color: var(--warn); background: var(--warn-bg); }
-.badge.VALIDATED  { color: var(--ok); background: var(--ok-bg); }
+.badge.VALIDATED  {
+  color: var(--ok); background: var(--ok-bg);
+  /* 승인된 문서 하나만 도장처럼 이중 링을 준다 -- 다른 배지는 그대로 둬서 튀지 않게.
+     outline은 box-shadow와 달리 뒤 배경색을 가정하지 않아서, 표 행이 호버·선택으로
+     배경이 바뀌어도 링 사이 틈이 항상 자연스럽다. */
+  outline: 2px solid var(--ok);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 1px rgba(22, 163, 74, .13);
+}
 .badge.FAILED     { color: var(--neutral); background: var(--neutral-bg); }
 .badge.PROCESSING { color: var(--accent); background: var(--accent-soft); }
 
@@ -213,6 +293,22 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tbody tr.clickable { cursor: pointer; }
 tbody tr.clickable:hover { background: var(--panel); }
 tbody tr.selected { background: var(--accent-soft); }
+
+/* 문서 목록 표 -- 열마다 폭을 정해뒀으니, 브라우저가 파일명 칸에 남는 공간을
+   전부 몰아주지 않게 고정 레이아웃으로 비율을 지킨다. */
+.doc-table { table-layout: fixed; }
+.doc-table td.ellipsis {
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+
+/* 표 페이지 네비게이션 -- 10건씩 자른다. */
+.pager {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: .8rem; flex-wrap: wrap; gap: .6rem;
+}
+.pager-buttons { display: flex; align-items: center; gap: .3rem; }
+.pager-buttons .btn { padding: .35rem .7rem; font-size: .85rem; min-width: 2.1rem; text-align: center; }
+.pager-ellipsis { color: var(--muted); padding: 0 .2rem; font-size: .85rem; }
 
 /* 검증 오류 */
 .issue {

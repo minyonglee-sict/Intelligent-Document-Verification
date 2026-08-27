@@ -3,6 +3,25 @@
 
 export type DocStatus = 'PROCESSING' | 'PENDING' | 'ERROR' | 'VALIDATED' | 'FAILED'
 
+export type Role = 'admin' | 'user'
+
+/** 로그인/가입/내 정보 응답이 공통으로 담는 사람 정보. */
+export interface AuthUser {
+  username: string
+  display_name: string
+  role: Role
+}
+
+/** 관리자 화면(사용자 관리)에서 보는 목록 한 줄. */
+export interface AdminUser {
+  id: number
+  username: string
+  display_name: string
+  role: Role
+  role_label: string
+  created_at: string
+}
+
 export interface LineItem {
   position: number | null
   description: string
@@ -42,6 +61,8 @@ export interface DocumentSummary {
   filename: string
   status: DocStatus
   status_label: string
+  doc_type: InvoiceFields['doc_type']
+  doc_type_label: string
   page_count: number | null
   model: string | null
   error_count: number

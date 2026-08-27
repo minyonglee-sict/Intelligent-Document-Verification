@@ -12,3 +12,6 @@ python-multipart>=0.0.9
 
 # MCP 서버 (mcp_server.py). 조회·진단 도구를 MCP 클라이언트에 낸다.
 mcp>=2.0
+
+# 문서 처리 큐 (worker.py). api.py는 발행만 하고, 실제 처리는 별도 워커가 한다.
+pika>=1.3

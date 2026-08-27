@@ -29,6 +29,15 @@ Docling이 표를 놓치면 그 행은 사라지는 게 아니라 문단으로 �
 규칙이 따로 잡아 검수자에게 알린다.
 
 표가 멀쩡히 읽힌 문서는 이 코드를 타지 않는다. 빠진 행이 있을 때만 돈다.
+
+이 파일은 품목(표) 복원 말고 하나를 더 한다 -- recover_header_hints(). 머리말도
+비슷하게 깨지는 문서가 있다: '라벨 칸'과 '값 칸'이 나란히 있는 2단 레이아웃을
+Docling이 왼쪽 칸을 통째로 다 읽은 뒤에야 오른쪽 칸으로 넘어가서, 마크다운엔
+라벨 무더기 뒤에 값 무더기가 따로 떨어져 나온다(Receipt# / Issue Date / ... /
+: KCC-RC-002 / : Jan 03, 2024). 품목과 달리 머리말엔 '수량 x 단가 = 금액' 같은
+보편 검산이 없어서, 값을 직접 확정하지 않는다 -- 대신 같은 줄(top 좌표) 기준으로
+라벨과 값을 다시 짝지어 LLM에게 참고 자료로만 얹어준다. 최종 값은 여전히
+LLM이 정하고, grounding_check 는 이 힌트가 안 섞인 원문(markdown) 그대로 돈다.
 """
 
 from __future__ import annotations
@@ -50,6 +59,11 @@ _MONEY = re.compile(
 
 # '5 pcs.' / '10 units'
 _COUNT = re.compile(rf"(?i)\b(?P<n>\d+(?:[.,]\d+)?)\s*(?:{_UNIT})")
+
+# 라벨과 떨어져 나온 값. ': KCC-RC-002' 처럼 콜론으로 시작하는 조각 -- 원래
+# 라벨과 한 줄이었는데 Docling이 칸(열) 단위로 읽어서 떨어져 나온 흔적이다.
+# 이 콜론 접두어 자체가 신호라, 다른 문서에서 우연히 나올 일이 드물다.
+_ORPHAN_VALUE = re.compile(r"^:\s*(?P<value>\S.*)$")
 
 # 통화 기호도 단위도 없이 숫자만 나열된 행. '650519018-X 10 140 설명... 1400' 처럼
 # 품번 다음에 수량·단가가 곧장 오고, 맨 끝에 금액이 오는 문서가 있다(invoice-8-0.pdf).
@@ -280,3 +294,61 @@ def recover_missing_items(
     )
     unnumbered = [i for i in merged if i.position is None]
     return numbered + unnumbered, len(recovered)
+
+
+_ROW_TOLERANCE = 1.0  # 포인트 단위. 이 안이면 "같은 줄"로 본다.
+
+
+def recover_header_hints(docling_json: Any) -> str:
+    """라벨 칸과 값 칸이 나란히 있다가 Docling이 세로로 통째로 나눠 읽어버린
+    머리말을, 같은 줄(top 좌표) 기준으로 다시 짝지어 LLM에게 줄 힌트로 만든다.
+
+    최종 값을 여기서 확정하지 않는다 -- 품목과 달리 머리말엔 보편 검산이 없어서,
+    잘못 짝지어도 걸러낼 방법이 없다. 그래서 이 결과는 "참고 자료"로만 LLM에게
+    얹어주고, 실제 채택 여부는 여전히 LLM 판단 + grounding_check 몫으로 남긴다.
+    grounding_check 는 이 힌트가 안 섞인 원문 그대로 돈다(pipeline.py 참고).
+
+    ':'로 시작하는 조각(_ORPHAN_VALUE)이 없으면 -- 즉 이 문제가 없는 보통
+    문서라면 -- 빈 문자열을 돌려주고 아무 흔적도 안 남긴다.
+    """
+    fragments = _fragments(docling_json)
+    if not fragments:
+        return ""
+
+    by_page: dict[int, list[dict[str, Any]]] = {}
+    for fragment in fragments:
+        by_page.setdefault(fragment["page"], []).append(fragment)
+
+    pairs: list[tuple[str, str]] = []
+    for page_fragments in by_page.values():
+        orphans = [f for f in page_fragments if _ORPHAN_VALUE.match(f["text"])]
+        if not orphans:
+            continue
+        labels = [f for f in page_fragments if not _ORPHAN_VALUE.match(f["text"])]
+
+        for value_fragment in orphans:
+            # 같은 줄(top 차이가 아주 작음) + 왼쪽에 있는 것들 중, 값에 제일
+            # 가까운(가장 오른쪽) 조각을 그 라벨로 본다.
+            same_row = [
+                f
+                for f in labels
+                if abs(f["top"] - value_fragment["top"]) < _ROW_TOLERANCE
+                and f["left"] < value_fragment["left"]
+            ]
+            if not same_row:
+                continue
+            label = max(same_row, key=lambda f: f["left"])
+            value = _ORPHAN_VALUE.match(value_fragment["text"]).group("value").strip()
+            if label["text"].strip() and value:
+                pairs.append((label["text"].strip(), value))
+
+    if not pairs:
+        return ""
+
+    lines = "\n".join(f"{label}: {value}" for label, value in pairs)
+    return (
+        "[참고: 아래는 원문에서 라벨과 값이 서로 떨어져 나온 자리를 같은 줄"
+        " 좌표 기준으로 다시 짝지은 것입니다. 실제 원문이 아니라 참고용 힌트이니,"
+        " 값 추출에만 참고하고 그대로 베끼지는 마세요.]\n"
+        f"{lines}\n"
+    )
