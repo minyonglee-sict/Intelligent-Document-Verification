@@ -67,6 +67,7 @@ services:
       - "host.docker.internal:host-gateway"   # 리눅스 컨테이너에서도 호스트를 이 이름으로 찾게 함
     volumes:
       - ./data:/app/data
+      - docling_cache:/root/.cache   # worker와 같은 이유(재빌드마다 모델 새로 안 받게) -- engine도 Docling을 직접 쓴다(재파싱 등)
     depends_on:
       mssql:
         condition: service_healthy

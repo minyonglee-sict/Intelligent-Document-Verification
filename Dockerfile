@@ -27,6 +27,14 @@ WORKDIR /app
 
 # requirements 먼저 설치해야, 코드만 바뀌었을 때 이 레이어를 다시 안 태운다.
 COPY requirements.txt .
+
+# docling이 물고 오는 PyTorch는 그냥 설치하면 GPU(CUDA)용 빌드가 깔린다 --
+# nvidia-cudnn/nvidia-nccl 등 부속 패키지까지 같이 받아서 이것만 2.7GB다. 이
+# 컨테이너엔 GPU가 없고 CPU로만 돈다(Docling 자체가 CPU 추론). CPU 전용 휠을
+# docling보다 먼저 깔아두면, 뒤이어 requirements.txt를 설치할 때 이미 만족된
+# 요구사항으로 보고 CUDA판으로 갈아치우지 않는다.
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ app/
