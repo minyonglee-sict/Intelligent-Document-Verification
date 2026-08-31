@@ -82,7 +82,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         ? detail
         : typeof (detail as { message?: string })?.message === 'string'
           ? (detail as { message: string }).message
-          : `요청이 실패했습니다 (${response.status})`
+          // 520~530은 우리 서버가 만드는 코드가 아니라 Cloudflare Tunnel 자체가
+          // "origin(우리 컨테이너)한테 응답을 못 받았다"고 붙이는 코드다 --
+          // 엔진·백엔드·DB가 실제로 죽은 게 아니라, 메모리 과부하 등으로 응답이
+          // 늦어져서 Cloudflare가 먼저 포기한 경우가 대부분이다("연결 안 됨"이라고
+          // 하면 서버가 죽은 것처럼 오해하기 쉽다).
+          : response.status >= 520 && response.status <= 530
+            ? '서버 응답이 늦어지고 있습니다. 처리 중인 작업이 많으면 시간이 걸릴 수 있으니 잠시 후 새로고침해주세요.'
+            : `요청이 실패했습니다 (${response.status})`
     throw new ApiError(response.status, message, detail ?? body)
   }
   return body as T

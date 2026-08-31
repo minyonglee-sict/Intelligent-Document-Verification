@@ -141,7 +141,12 @@ export default function App() {
 
         <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} env={env} />
 
-        {failure && <div className="notice err">백엔드에 연결하지 못했습니다: {failure}</div>}
+        {/* "연결 못함" 이라고 고정해서 붙이지 않는다 -- 아래 failure 문구 자체가
+            이미 원인(연결 실패인지, 응답 지연인지)을 구분해서 담고 있다. 예전엔
+            항상 "백엔드에 연결하지 못했습니다"를 붙였는데, Cloudflare Tunnel의
+            520~530(서버는 살아있는데 응답만 늦은 경우)까지 "연결 못함"으로
+            보여서 실제론 안 죽었는데 죽은 것처럼 보이는 오해가 있었다. */}
+        {failure && <div className="notice err">{failure}</div>}
         {flash && <div className="notice ok">{flash}</div>}
 
         <nav className="tabs">
