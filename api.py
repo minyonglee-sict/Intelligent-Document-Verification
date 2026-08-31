@@ -248,13 +248,21 @@ admin_router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
 
 @app.post("/auth/login", response_model=LoginResponse)
 def login(body: LoginRequest) -> LoginResponse:
+    # 아이디/비밀번호 오류를 구분해서 보여준다 -- 사내용 도구라 계정 존재 여부가
+    # 노출되는 것보다(무차별 대입으로 아이디를 캐낼 수 있게 됨) 사용성을 택한
+    # 판단이다. 위험을 낮게 보는 내부용 도구가 아니라면 이 구분은 되돌리는 게 맞다.
     user = db.get_user_by_username(body.username.strip())
-    if not user or not auth.verify_password(
-        body.password, user["password_hash"], user["password_salt"]
-    ):
-        # 아이디가 없는지 비밀번호가 틀렸는지는 구분해 주지 않는다 -- 구분해 주면
-        # 존재하는 아이디를 무차별로 캐낼 수 있는 자리가 생긴다.
-        raise HTTPException(401, "아이디 또는 비밀번호가 올바르지 않습니다.")
+    if not user:
+        raise HTTPException(400, "아이디가 존재하지 않습니다.")
+    if not auth.verify_password(body.password, user["password_hash"], user["password_salt"]):
+        # 401이 아니라 400인 이유: Java 백엔드(EngineClient, SimpleClientHttpRequestFactory
+        # 기반)가 POST + 401 응답 조합에서만 본문을 못 읽어 화면에 이 메시지 대신
+        # "요청이 실패했습니다"만 떴다(GET+401, POST+400 은 멀쩡했다 -- JDK
+        # HttpURLConnection 쪽 문제로 보이며, HTTP 클라이언트를 바꿔도 고쳐지지
+        # 않았다). 로그인 실패는 어차피 HTTP 인증 challenge(WWW-Authenticate)를
+        # 쓰는 게 아니라 이 화면의 JSON API 라 401 이어야 할 근거가 강하지 않으므로,
+        # 상태 코드를 바꿔서 우회한다.
+        raise HTTPException(400, "비밀번호가 올바르지 않습니다.")
     token = auth.new_token()
     db.create_session(int(user["id"]), token, config.SESSION_TTL_HOURS)
     return LoginResponse(
@@ -336,19 +344,24 @@ def change_password(
     """현재 비밀번호를 확인한 뒤 바꾼다. Depends(require_user) 대신 여기서 직접
     토큰을 검사하는 이유는, db.change_password 가 "이 세션은 살려두고 나머지는
     로그아웃" 하려면 토큰 문자열 자체가 있어야 하기 때문이다(logout 과 같은 이유).
+
+    아래 세 오류가 다 401이 아니라 400인 이유는 login() 위 주석과 같다 -- 이
+    경로는 화면에서 세션 만료로 취급 안 하고(api.ts 의 isAuthCheck401) 폼 안
+    오류로만 보여주므로, POST+401에서 본문을 못 읽는 Java 쪽 문제(EngineClient)를
+    그대로 물려받는다.
     """
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "로그인이 필요합니다.")
+        raise HTTPException(400, "로그인이 필요합니다.")
     token = authorization.removeprefix("Bearer ").strip()
     session_user = db.get_session_user(token)
     if not session_user:
-        raise HTTPException(401, "로그인이 만료되었거나 유효하지 않습니다. 다시 로그인하세요.")
+        raise HTTPException(400, "로그인이 만료되었거나 유효하지 않습니다. 다시 로그인하세요.")
 
     user = db.get_user_by_username(session_user["username"])
     if not user or not auth.verify_password(
         body.current_password, user["password_hash"], user["password_salt"]
     ):
-        raise HTTPException(401, "현재 비밀번호가 올바르지 않습니다.")
+        raise HTTPException(400, "현재 비밀번호가 올바르지 않습니다.")
     if len(body.new_password) < 8:
         raise HTTPException(400, "새 비밀번호는 8자 이상이어야 합니다.")
 
