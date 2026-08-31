@@ -17,6 +17,7 @@ from __future__ import annotations
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncIterator, Literal, Optional
 
 from fastapi import (
@@ -505,6 +506,31 @@ def get_docling_json(doc_id: int) -> dict[str, Any]:
         return {"document_id": doc_id, "docling_json": _json.loads(raw)}
     except ValueError as exc:
         raise HTTPException(500, f"Docling JSON 을 해석하지 못했습니다: {exc}")
+
+
+@protected.get("/documents/{doc_id}/file")
+def download_file(doc_id: int) -> FileResponse:
+    """업로드된 원본 파일(대개 PDF)을 그대로 내려준다.
+
+    stored_path 는 처리 시작 시점에 서버가 직접 정한 값이라(app/pipeline.py
+    store_upload) 사용자 입력이 아니지만, 통째로 신뢰하진 않는다 -- 다른 OS에서
+    (예: 로컬 Windows 실행 때) 기록된 값이 DB 이관으로 그대로 넘어오면
+    `C:\...` 같은 절대경로가 리눅스 컨테이너 안에선 안 맞는다. 그래서 경로
+    구분자를 정규화해 파일명만 뽑고, 지금 이 프로세스의 UPLOAD_DIR 기준으로
+    다시 찾는다 -- data/uploads 밖을 가리키는 값이 어쩌다 들어와도 안 내려주게
+    한 번 더 확인하는 건 reports 첨부(_report_folder)와 같은 원칙이다. 파일명은
+    저장할 때 붙인 타임스탬프 접두어(내부용)가 아니라 사용자가 올린 원래
+    이름으로 내려줘야 다운로드했을 때 알아볼 수 있다.
+    """
+    row = _load(doc_id)
+    stored_path = row.get("stored_path")
+    if not stored_path:
+        raise HTTPException(404, f"문서 #{doc_id} 의 원본 파일 경로가 없습니다.")
+    filename_on_disk = stored_path.replace("\\", "/").rsplit("/", 1)[-1]
+    path = (config.UPLOAD_DIR / filename_on_disk).resolve()
+    if path.parent != config.UPLOAD_DIR.resolve() or not path.is_file():
+        raise HTTPException(404, f"문서 #{doc_id} 의 원본 파일을 찾을 수 없습니다.")
+    return FileResponse(path, filename=row["filename"])
 
 
 # --------------------------------------------------------------------------

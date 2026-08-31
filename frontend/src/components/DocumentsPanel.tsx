@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from '../api'
+import { api, downloadFile } from '../api'
 import type { DocumentSummary } from '../types'
 import { DocumentInspector } from './DocumentInspector'
 
@@ -49,6 +49,7 @@ export function DocumentsPanel({ rows, counts, onChanged, onNotice }: Props) {
   const [checked, setChecked] = useState<number[]>([])
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [downloadingId, setDownloadingId] = useState<number | null>(null)
 
   const listed = rows
     .filter((r) => filter === '(전체)' || r.status === filter)
@@ -74,6 +75,17 @@ export function DocumentsPanel({ rows, counts, onChanged, onNotice }: Props) {
 
   const toggle = (id: number) =>
     setChecked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+
+  const handleDownload = async (row: DocumentSummary) => {
+    setDownloadingId(row.id)
+    try {
+      await downloadFile(row.id, row.filename)
+    } catch {
+      onNotice(`#${row.id} 파일을 받지 못했습니다.`)
+    } finally {
+      setDownloadingId(null)
+    }
+  }
 
   const deleteChecked = async () => {
     setBusy(true)
@@ -200,6 +212,7 @@ export function DocumentsPanel({ rows, counts, onChanged, onNotice }: Props) {
               <th className="num" style={{ width: 50 }}>오류</th>
               <th className="num" style={{ width: 50 }}>쪽</th>
               <th style={{ width: 130 }}>등록</th>
+              <th style={{ width: 60 }}>파일</th>
             </tr>
           </thead>
           <tbody>
@@ -225,10 +238,20 @@ export function DocumentsPanel({ rows, counts, onChanged, onNotice }: Props) {
                 <td className="num">{row.error_count || ''}</td>
                 <td className="num">{row.page_count ?? ''}</td>
                 <td className="small muted">{(row.created_at ?? '').slice(0, 16).replace('T', ' ')}</td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="btn"
+                    title={`${row.filename} 다운로드`}
+                    disabled={downloadingId === row.id}
+                    onClick={() => handleDownload(row)}
+                  >
+                    {downloadingId === row.id ? '…' : '⬇️'}
+                  </button>
+                </td>
               </tr>
             ))}
             {listed.length === 0 && (
-              <tr><td colSpan={9} className="muted small">해당하는 문서가 없습니다.</td></tr>
+              <tr><td colSpan={10} className="muted small">해당하는 문서가 없습니다.</td></tr>
             )}
           </tbody>
         </table>

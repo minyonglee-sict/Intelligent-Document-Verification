@@ -93,6 +93,40 @@ export function onUnauthorized(handler: () => void): () => void {
   return () => window.removeEventListener(UNAUTHORIZED_EVENT, handler)
 }
 
+/** 원본 파일(대개 PDF) 다운로드. 로그인 토큰이 Authorization 헤더로만 실리므로
+ *  (쿠키 세션이 아니다) <a href> 로 그냥 못 받는다 -- 브라우저가 커스텀 헤더를
+ *  안 붙여준다. fetch 로 직접 받아 Blob 으로 저장한다. */
+export async function downloadFile(id: number, fallbackFilename: string): Promise<void> {
+  const headers = new Headers()
+  const token = getToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  const response = await fetch(`${BASE}/documents/${id}/file`, { headers })
+  if (!response.ok) {
+    if (response.status === 401) {
+      setToken(null)
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+    }
+    throw new ApiError(response.status, `파일을 받지 못했습니다 (${response.status})`, null)
+  }
+
+  // 서버가 Content-Disposition 에 원본 파일명을 실어 보내므로, 되도록 그걸 쓰고
+  // (프록시가 헤더를 못 살리는 경우를 대비해) 없으면 목록에 있던 이름으로 대신한다.
+  const disposition = response.headers.get('Content-Disposition') ?? ''
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition)
+  const filename = match ? decodeURIComponent(match[1]) : fallbackFilename
+
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export const api = {
   health: () => request<{ ok: boolean; database: string; ollama: string }>('/health'),
 

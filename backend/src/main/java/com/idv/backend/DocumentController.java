@@ -137,6 +137,13 @@ public class DocumentController {
         return passThrough(engine.forward(HttpMethod.GET, "/documents/" + id + "/docling-json"));
     }
 
+    /** 업로드된 원본 파일(대개 PDF) 다운로드. reportImage 와 같은 이유로 binary()를 쓴다 --
+     *  JSON이 아니라 파일 바이트를 그대로 넘겨야 한다. */
+    @GetMapping("/documents/{id}/file")
+    public ResponseEntity<byte[]> file(@PathVariable long id) {
+        return engine.binary("/documents/" + id + "/file");
+    }
+
     /** 업로드는 접수만 하고 작업 번호를 돌려준다. 처리는 엔진에서 이어진다. */
     @PostMapping(value = "/documents", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<String> upload(
