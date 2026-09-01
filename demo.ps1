@@ -1,26 +1,27 @@
 ﻿<#
 .SYNOPSIS
-    docker-compose 스택(Docker Desktop) + Cloudflare Quick Tunnel을 한 번에 띄운다.
+    docker-compose 스택(Docker Desktop) + Cloudflare Named Tunnel을 한 번에 띄운다.
 
 .DESCRIPTION
     docker-compose.yml 은 화면(8081)까지 컨테이너로 띄우지만, 그 자체로는 로컬에서만
     열린다. 외부(폰, 다른 PC)에 데모로 보여주려면 cloudflared 로 터널을 따로 열어야
-    하는데, docker-compose.yml 에는 그 서비스가 없다 -- Quick Tunnel 은 실행할 때마다
-    임시 주소를 새로 받는 방식이라 컨테이너처럼 고정해 둘 수가 없기 때문이다.
+    하는데, docker-compose.yml 에는 그 서비스가 없다.
 
-    그래서 이 스크립트가 두 단계를 순서대로 묶는다:
+    처음엔 Quick Tunnel(`cloudflared tunnel --url ...`)을 썼는데, 실행할 때마다
+    주소가 랜덤으로 바뀌고 창을 닫으면 그 주소가 영영 죽는 문제가 있었다. 그래서
+    가비아에서 산 고정 도메인(idv-check.shop)을 Cloudflare에 연결하고, Named
+    Tunnel(`cloudflared tunnel run idv`, 설정은 `C:\Users\user\.cloudflared\config.yml`)
+    로 바꿨다 -- 이제 몇 번을 껐다 켜도 주소가 안 바뀐다.
+
+    이 스크립트는 두 단계를 순서대로 묶는다:
       1) docker compose up --build -d   (mssql/rabbitmq/engine/worker/backend/frontend)
-      2) 세 계층이 응답하기 시작하면 cloudflared 를 새 창에서 연다
-
-    cloudflared 창은 계속 떠 있어야 터널이 산다 -- 닫으면 그 순간 주소가 죽는다
-    (재발급 없이 그냥 사라진다). 실행마다 새 주소가 나오니, 뜬 창에서 URL을 그대로
-    복사해 쓴다.
+      2) 세 계층이 응답하기 시작하면 cloudflared Named Tunnel을 새 창에서 연다
 
     docker-compose.yml 자체의 주의사항(.env 준비, 포트 겹침)은 그대로 유효하다 --
     이 스크립트는 그 위에 터널 단계만 얹은 것이다.
 
 .EXAMPLE
-    .\demo.ps1            # 컨테이너 + 터널 기동
+    .\demo.ps1            # 컨테이너 + 터널 기동 -- https://idv-check.shop 로 접속
     .\demo.ps1 -Stop       # 컨테이너 + 터널 종료
     .\demo.ps1 -NoTunnel   # 컨테이너만 띄우고 터널은 안 연다 (로컬 확인용)
 #>
@@ -29,7 +30,9 @@ param(
     [switch]$NoTunnel,
     [int]$EnginePort = 8000,
     [int]$BackendPort = 8080,
-    [int]$FrontendPort = 8081
+    [int]$FrontendPort = 8081,
+    [string]$TunnelName = "idv",
+    [string]$Domain = "idv-check.shop"
 )
 
 $ErrorActionPreference = "Stop"
@@ -149,11 +152,11 @@ if ($NoTunnel) {
 
 Write-Host ""
 Write-Host "터널 오픈" -ForegroundColor Cyan
-Start-InWindow -Title "IDV 터널" -WorkDir $Root -Command "cloudflared tunnel --url http://localhost:$FrontendPort"
+Start-InWindow -Title "IDV 터널" -WorkDir $Root -Command "cloudflared tunnel run $TunnelName"
 
 Write-Host ""
-Write-Host "  새로 뜬 'IDV 터널' 창에서 https://....trycloudflare.com 주소가 찍히면 그걸 쓰세요." -ForegroundColor Green
-Write-Host "  (실행마다 주소가 바뀝니다 -- 이 창을 닫으면 그 순간 주소가 죽습니다.)"
+Write-Host "  외부 접속   https://$Domain" -ForegroundColor Green
+Write-Host "  (고정 주소입니다 -- 이 창을 닫아도 다음에 다시 열면 그대로 씁니다.)"
 Write-Host ""
 Write-Host "  종료: .\demo.ps1 -Stop"
 Write-Host ""
