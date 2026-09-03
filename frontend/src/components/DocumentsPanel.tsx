@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, downloadFile } from '../api'
+import { formatDateTime, formatDuration } from '../format'
 import type { DocumentSummary } from '../types'
 import { DocumentInspector } from './DocumentInspector'
 
@@ -212,6 +213,7 @@ export function DocumentsPanel({ rows, counts, onChanged, onNotice }: Props) {
               <th className="num" style={{ width: 50 }}>오류</th>
               <th className="num" style={{ width: 50 }}>쪽</th>
               <th style={{ width: 130 }}>등록</th>
+              <th style={{ width: 80 }}>작업시간</th>
               <th style={{ width: 60 }}>파일</th>
             </tr>
           </thead>
@@ -237,7 +239,8 @@ export function DocumentsPanel({ rows, counts, onChanged, onNotice }: Props) {
                 <td><span className={`badge ${row.status}`}>{row.status_label}</span></td>
                 <td className="num">{row.error_count || ''}</td>
                 <td className="num">{row.page_count ?? ''}</td>
-                <td className="small muted">{(row.created_at ?? '').slice(0, 16).replace('T', ' ')}</td>
+                <td className="small muted">{formatDateTime(row.created_at)}</td>
+                <td className="small muted">{formatDuration(row.duration_seconds)}</td>
                 <td onClick={(e) => e.stopPropagation()}>
                   <button
                     className="btn"

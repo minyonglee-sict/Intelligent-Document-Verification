@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api'
+import { formatDateTime } from '../format'
 import type { DocumentSummary } from '../types'
 import { DocumentDetailPanel } from './DocumentDetail'
 
@@ -80,7 +81,7 @@ function Section({
               <td><span className={`badge ${row.status}`}>{row.status_label}</span></td>
               <td className="num">{row.error_count || ''}</td>
               <td className="num">{row.page_count ?? ''}</td>
-              <td className="small muted">{(row.created_at ?? '').slice(0, 16).replace('T', ' ')}</td>
+              <td className="small muted">{formatDateTime(row.created_at)}</td>
             </tr>
           ))}
         </tbody>

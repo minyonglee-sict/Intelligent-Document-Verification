@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { api } from '../api'
+import { jobDuration } from '../format'
 import type { Job } from '../types'
 
 /**
@@ -207,6 +208,7 @@ export function UploadPanel({ onFinished, jobs, setJobs }: Props) {
                 <th style={{ width: 130 }}>상태</th>
                 <th className="num" style={{ width: 70 }}>문서</th>
                 <th className="num" style={{ width: 70 }}>오류</th>
+                <th style={{ width: 80 }}>작업시간</th>
                 <th>비고</th>
               </tr>
             </thead>
@@ -227,6 +229,7 @@ export function UploadPanel({ onFinished, jobs, setJobs }: Props) {
                   </td>
                   <td className="num">{j.document_id ?? '-'}</td>
                   <td className="num">{j.state === 'DONE' && !j.skipped ? j.error_count : '-'}</td>
+                  <td className="small muted">{jobDuration(j.started_at, j.finished_at)}</td>
                   <td className="small muted">{j.message}</td>
                 </tr>
               ))}

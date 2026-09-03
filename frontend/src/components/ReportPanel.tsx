@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import { formatDateTime } from '../format'
 import type { ReportSummary } from '../types'
 
 /**
@@ -223,7 +224,7 @@ export function ReportPanel({ onChanged }: ReportPanelProps) {
             <details key={r.slug} className="report">
               <summary>
                 {r.status === 'RESOLVED' ? '✅' : '🐞'} #{String(r.number).padStart(4, '0')} ·{' '}
-                {r.created_at.slice(0, 16).replace('T', ' ')} ·{' '}
+                {formatDateTime(r.created_at)} ·{' '}
                 {r.message.split('\n')[0].slice(0, 70)}
               </summary>
               <div className="report-body">

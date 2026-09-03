@@ -71,7 +71,8 @@ SCHEMA_STATEMENTS = [
         reviewer_note   NVARCHAR(MAX),
         created_at      NVARCHAR(32)   NOT NULL,
         updated_at      NVARCHAR(32)   NOT NULL,
-        validated_at    NVARCHAR(32)
+        validated_at    NVARCHAR(32),
+        duration_seconds FLOAT
     )
     """,
     """
@@ -223,7 +224,7 @@ def init_db() -> None:
 def _add_missing_columns(conn: pyodbc.Connection) -> None:
     """이미 만들어진 테이블에 나중에 늘어난 컬럼을 채워 넣는다."""
     wanted = {
-        "documents": HEADER_COLUMNS,
+        "documents": HEADER_COLUMNS + [("duration_seconds", "FLOAT")],
         "line_items": [("tax", "FLOAT")],
         "users": [("role", "NVARCHAR(20) NOT NULL DEFAULT 'user'")],
     }
@@ -380,14 +381,21 @@ def finalize_document(
     model: str,
     page_count: int = 0,
     failure_reason: Optional[str] = None,
+    duration_seconds: Optional[float] = None,
 ) -> None:
-    """reserve_document로 잡아둔 행을 처리 결과로 채운다."""
+    """reserve_document로 잡아둔 행을 처리 결과로 채운다.
+
+    duration_seconds 는 pipeline.process_pdf 가 잰, Docling 추출부터 여기 저장까지
+    실제로 걸린 시간이다. 한 번 여기서 정해지면 이후 재검증(update_fields)이
+    updated_at 을 계속 건드려도 이 값은 그대로다 -- '처리에 얼마나 걸렸는가' 는
+    나중에 검수자가 값을 고친 시각과는 다른 질문이다.
+    """
     ts = _now()
     with connect() as conn:
         conn.execute(
             "UPDATE dbo.documents"
             "   SET status=?, is_valid=?, page_count=?, markdown=?, docling_json=?,"
-            "       model=?, failure_reason=?, updated_at=?"
+            "       model=?, failure_reason=?, duration_seconds=?, updated_at=?"
             " WHERE id=?",
             status,
             None if is_valid is None else int(is_valid),
@@ -396,6 +404,7 @@ def finalize_document(
             json.dumps(docling_json, ensure_ascii=False),
             model,
             failure_reason,
+            duration_seconds,
             ts,
             doc_id,
         )
@@ -541,7 +550,7 @@ def delete_documents(doc_ids: list[int]) -> int:
 def list_documents(status: Optional[str] = None) -> list[dict[str, Any]]:
     sql = (
         "SELECT id, filename, status, is_valid, page_count, model, failure_reason,"
-        "       doc_type, created_at, updated_at, validated_at"
+        "       doc_type, created_at, updated_at, validated_at, duration_seconds"
         "  FROM dbo.documents"
     )
     params: tuple = ()

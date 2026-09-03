@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -101,6 +102,23 @@ _BADGE_CLASS = {
 
 def inject_css() -> None:
     st.markdown(BADGE_CSS, unsafe_allow_html=True)
+
+
+def format_datetime(iso: str | None) -> str:
+    """DB에 저장된 UTC ISO 시각을 이 컴퓨터의 로컬 시간대로 바꿔 보여준다.
+
+    예전엔 문자열을 그냥 잘라서(`[:16]`) UTC 시각을 로컬 시각인 것처럼 보여줬다 --
+    KST 등 UTC가 아닌 시간대에서는 실제 시각과 몇 시간씩 어긋나 보였다.
+    """
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return iso[:16].replace("T", " ")
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()
+    return dt.strftime("%Y-%m-%d %H:%M")
 
 
 def status_badge(status: str, extra: str = "") -> str:

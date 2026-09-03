@@ -68,6 +68,7 @@ export interface DocumentSummary {
   error_count: number
   created_at: string | null
   validated_at: string | null
+  duration_seconds: number | null
 }
 
 export interface DocumentDetail extends DocumentSummary {

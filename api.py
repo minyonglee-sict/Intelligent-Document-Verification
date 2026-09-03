@@ -95,6 +95,7 @@ class DocumentSummary(BaseModel):
     error_count: int = 0
     created_at: Optional[str] = None
     validated_at: Optional[str] = None
+    duration_seconds: Optional[float] = None
 
 
 class ValidationError(BaseModel):
@@ -177,6 +178,7 @@ def _summary(row: dict[str, Any], error_count: int) -> DocumentSummary:
         error_count=error_count,
         created_at=row.get("created_at"),
         validated_at=row.get("validated_at") or None,
+        duration_seconds=row.get("duration_seconds"),
     )
 
 
