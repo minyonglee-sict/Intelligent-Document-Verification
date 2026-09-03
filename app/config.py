@@ -114,6 +114,14 @@ ROLE_LABELS = {ROLE_ADMIN: "관리자", ROLE_USER: "일반 사용자"}
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/%2F")
 DOCUMENT_QUEUE = os.getenv("DOCUMENT_QUEUE", "document_jobs")
 
+# worker.py 의 소비 연결에서만 쓴다. pika.BlockingConnection 은 메시지 콜백이
+# 도는 동안(Docling+Ollama 처리, 문서 하나에 수 분~십수 분) 하트비트에 응답을
+# 못 한다 -- 기본 하트비트(보통 60초)로는 처리 도중 "죽은 연결"로 오판돼 끊기고,
+# 재배달된 메시지가 아직 PROCESSING인 문서를 보고 건너뛰면서 그 문서가 영원히
+# PROCESSING에 멈춰버린다(실제로 겪음). STALE_PROCESSING_MINUTES(기본 90분)보다는
+# 여유 있게 짧게 잡는다.
+CONSUMER_HEARTBEAT_SECONDS = int(os.getenv("CONSUMER_HEARTBEAT_SECONDS", "1200"))
+
 # 메일 발송(app/mailer.py). SMTP_USER/SMTP_PASSWORD 가 비어 있으면(기본값)
 # mailer.send_email 이 명확한 오류를 낸다 -- 조용히 안 보내고 넘어가면 "보낸 줄
 # 알았는데 안 갔다"가 된다. Gmail 이면 계정 비밀번호가 아니라 "앱 비밀번호"를

@@ -21,9 +21,16 @@ import pika
 from . import config
 
 
-def connection() -> pika.BlockingConnection:
-    """RabbitMQ 연결을 새로 연다. 호출부가 닫아야 한다."""
-    return pika.BlockingConnection(pika.URLParameters(config.RABBITMQ_URL))
+def connection(*, heartbeat: int | None = None) -> pika.BlockingConnection:
+    """RabbitMQ 연결을 새로 연다. 호출부가 닫아야 한다.
+
+    heartbeat 를 주면 기본값(서버 협상값, 보통 60초) 대신 그 값을 쓴다 --
+    consume() 이 긴 하트비트가 필요해서 쓴다 (아래 주석 참고).
+    """
+    params = pika.URLParameters(config.RABBITMQ_URL)
+    if heartbeat is not None:
+        params.heartbeat = heartbeat
+    return pika.BlockingConnection(params)
 
 
 def _declare_queue(channel: Any) -> None:
@@ -76,8 +83,12 @@ def consume(on_message: Callable[[dict[str, Any]], None]) -> None:
     prefetch_count=1 -- 한 번에 한 건만 받는다. 문서 1건 처리에 수 분이 걸리는데
     여러 건을 미리 받아 쌓아두면, 워커를 여러 대 띄워도 한 워커가 독차지하고
     나머지는 노는 상황이 생긴다. 1건씩 받아야 다음 워커가 바로 다음 건을 집는다.
+
+    heartbeat 를 길게 잡는다 -- on_message(콜백) 안에서 Docling+Ollama 처리가
+    통째로 동기적으로 도는 동안 pika가 하트비트에 응답을 못 해, 기본값이면
+    처리 도중 RabbitMQ가 연결을 끊어버린다(CONSUMER_HEARTBEAT_SECONDS 주석 참고).
     """
-    conn = connection()
+    conn = connection(heartbeat=config.CONSUMER_HEARTBEAT_SECONDS)
     channel = conn.channel()
     _declare_queue(channel)
     channel.basic_qos(prefetch_count=1)
