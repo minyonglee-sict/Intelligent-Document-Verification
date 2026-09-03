@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 import traceback
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +19,20 @@ from . import config, db, extractor, layout_recovery, validator
 from .schemas import InvoiceFields, ValidationIssue
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+@contextmanager
+def _stage(label: str):
+    """구간별 소요 시간을 워커 로그에 남긴다.
+
+    문서 하나에 수 분~십수 분이 걸리는데, 지금까지는 시작·끝 시각만 로그에
+    남아 어느 구간(Docling 추출 vs Ollama 머리말 추출)이 느린지 알 수 없었다.
+    """
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        print(f"[pipeline]   {label}: {time.perf_counter() - start:.1f}s", flush=True)
 
 
 @dataclass
@@ -57,6 +73,7 @@ def process_pdf(
     파이프라인이 실패해도 예외를 올리지 않고 status=FAILED 로 기록한다.
     다건 업로드 중 한 건 때문에 전체가 멈추면 안 되기 때문이다.
     """
+    started = time.perf_counter()
     digest = file_hash(data)
     stored_path = store_upload(filename, data)
 
@@ -97,19 +114,29 @@ def process_pdf(
             model=config.OLLAMA_MODEL,
             page_count=extraction.page_count if extraction else 0,
             failure_reason=reason,
+            duration_seconds=time.perf_counter() - started,
         )
         return ProcessOutcome(filename, doc_id, config.STATUS_FAILED, message=message)
 
     try:
-        extraction = extractor.extract(stored_path)
+        with _stage("Docling 추출"):
+            extraction = extractor.extract(stored_path)
     except Exception as exc:
         return fail(
             f"Docling 추출 실패: {exc}\n{traceback.format_exc(limit=3)}",
             f"추출 실패: {exc}",
         )
 
+    # 라벨과 값이 같은 줄이었는데 Docling이 칸(열) 단위로 읽어 떨어뜨린 문서라면,
+    # 좌표 기준으로 다시 짝지은 참고 자료를 만든다. 그런 문제가 없는 문서는 빈
+    # 문자열이라 아래 extract_fields 호출에 아무 영향도 없다.
+    header_hint = layout_recovery.recover_header_hints(extraction.docling_json)
+
     try:
-        fields, extraction_issues = validator.extract_fields(extraction.markdown)
+        with _stage("Ollama 머리말 추출"):
+            fields, extraction_issues = validator.extract_fields(
+                extraction.markdown, header_hint
+            )
     except Exception as exc:
         return fail(f"LLM 필드 추출 실패: {exc}", f"LLM 추출 실패: {exc}", extraction)
 
@@ -134,20 +161,23 @@ def process_pdf(
             )
         )
 
-    result = validator.validate(extraction.markdown, fields, extraction_issues)
+    with _stage("규칙 검증"):
+        result = validator.validate(extraction.markdown, fields, extraction_issues)
     status = config.STATUS_PENDING if result.is_valid else config.STATUS_ERROR
 
-    db.finalize_document(
-        doc_id,
-        status=status,
-        is_valid=result.is_valid,
-        markdown=extraction.markdown,
-        docling_json=extraction.docling_json,
-        fields=fields,
-        errors=result.errors,
-        model=config.OLLAMA_MODEL,
-        page_count=extraction.page_count,
-    )
+    with _stage("DB 저장"):
+        db.finalize_document(
+            doc_id,
+            status=status,
+            is_valid=result.is_valid,
+            markdown=extraction.markdown,
+            docling_json=extraction.docling_json,
+            fields=fields,
+            errors=result.errors,
+            model=config.OLLAMA_MODEL,
+            page_count=extraction.page_count,
+            duration_seconds=time.perf_counter() - started,
+        )
     return ProcessOutcome(
         filename=filename,
         document_id=doc_id,

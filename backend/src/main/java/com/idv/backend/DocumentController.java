@@ -49,6 +49,64 @@ public class DocumentController {
         return passThrough(engine.forward(HttpMethod.GET, "/health"));
     }
 
+    // ------------------------------------------------------------------------
+    // 로그인. 계정 검사·세션 토큰 발급/해제는 전부 엔진(api.py)이 한다 -- 여기는
+    // 그대로 통로다. 로그인 뒤 다른 모든 요청에 실리는 Authorization 헤더는
+    // EngineClient 의 요청 인터셉터가 자동으로 엔진까지 넘기므로, 그 요청들의
+    // 메서드는 따로 손대지 않았다.
+    // ------------------------------------------------------------------------
+
+    @PostMapping(value = "/auth/login", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> login(@RequestBody String body) {
+        return passThrough(engine.forward(HttpMethod.POST, "/auth/login", body));
+    }
+
+    @PostMapping(value = "/auth/signup", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> signup(@RequestBody String body) {
+        return passThrough(engine.forward(HttpMethod.POST, "/auth/signup", body));
+    }
+
+    /** 로그인 화면에서 관리자에게 재설정을 요청할 때. 메일 발송 자체는 엔진(app/mailer.py)이 한다. */
+    @PostMapping(value = "/auth/forgot-password", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> forgotPassword(@RequestBody String body) {
+        return passThrough(engine.forward(HttpMethod.POST, "/auth/forgot-password", body));
+    }
+
+    @PostMapping("/auth/logout")
+    public ResponseEntity<String> logout() {
+        return passThrough(engine.forward(HttpMethod.POST, "/auth/logout"));
+    }
+
+    @GetMapping("/auth/me")
+    public ResponseEntity<String> me() {
+        return passThrough(engine.forward(HttpMethod.GET, "/auth/me"));
+    }
+
+    @PostMapping(value = "/auth/change-password", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> changePassword(@RequestBody String body) {
+        return passThrough(engine.forward(HttpMethod.POST, "/auth/change-password", body));
+    }
+
+    // ------------------------------------------------------------------------
+    // 사용자 관리(관리자 전용). role='admin' 검사는 전부 엔진이 한다 -- 여기는
+    // 통로일 뿐이고, 관리자가 아니면 엔진이 403을 돌려준다.
+    // ------------------------------------------------------------------------
+
+    @GetMapping("/admin/users")
+    public ResponseEntity<String> adminListUsers() {
+        return passThrough(engine.forward(HttpMethod.GET, "/admin/users"));
+    }
+
+    @PostMapping(value = "/admin/users/{id}/role", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> adminSetRole(@PathVariable long id, @RequestBody String body) {
+        return passThrough(engine.forward(HttpMethod.POST, "/admin/users/" + id + "/role", body));
+    }
+
+    @PostMapping(value = "/admin/users/{id}/reset-password", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> adminResetPassword(@PathVariable long id, @RequestBody String body) {
+        return passThrough(engine.forward(HttpMethod.POST, "/admin/users/" + id + "/reset-password", body));
+    }
+
     @GetMapping("/documents")
     public ResponseEntity<String> list(@RequestParam(required = false) String status) {
         String path = "/documents";
@@ -77,6 +135,13 @@ public class DocumentController {
     @GetMapping("/documents/{id}/docling-json")
     public ResponseEntity<String> doclingJson(@PathVariable long id) {
         return passThrough(engine.forward(HttpMethod.GET, "/documents/" + id + "/docling-json"));
+    }
+
+    /** 업로드된 원본 파일(대개 PDF) 다운로드. reportImage 와 같은 이유로 binary()를 쓴다 --
+     *  JSON이 아니라 파일 바이트를 그대로 넘겨야 한다. */
+    @GetMapping("/documents/{id}/file")
+    public ResponseEntity<byte[]> file(@PathVariable long id) {
+        return engine.binary("/documents/" + id + "/file");
     }
 
     /** 업로드는 접수만 하고 작업 번호를 돌려준다. 처리는 엔진에서 이어진다. */

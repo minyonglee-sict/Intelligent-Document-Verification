@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from . import config, db, pipeline, ui_report
-from .ui_common import render_errors, status_badge
+from .ui_common import format_datetime, render_errors, status_badge
 
 # 표의 선택 상태는 행 '위치'로 남는다. 문서를 지운 뒤 그대로 두면 같은 위치의
 # 다른 문서가 선택된 것처럼 보이므로, key 를 바꿔 위젯을 새로 만든다.
@@ -50,8 +50,8 @@ def render() -> None:
                 "오류": counts.get(r["id"], 0),
                 "페이지": r["page_count"],
                 "모델": r["model"],
-                "등록": r["created_at"],
-                "승인": r["validated_at"] or "",
+                "등록": format_datetime(r["created_at"]),
+                "승인": format_datetime(r["validated_at"]),
             }
             for position, r in enumerate(rows, start=1)
         ]

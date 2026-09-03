@@ -17,6 +17,7 @@ from typing import Any, Iterator, Optional
 import streamlit as st
 
 from . import config, report
+from .ui_common import format_datetime
 
 # --------------------------------------------------------------------------
 # 붙여넣기 영역 (CCv2)
@@ -354,7 +355,7 @@ def render_inbox() -> None:
     for record in shown:
         resolved = record.get("status") == report.STATUS_RESOLVED
         mark = "✅" if resolved else "🐞"
-        created = (record.get("created_at") or "")[:16].replace("T", " ")
+        created = format_datetime(record.get("created_at"))
         label = f"{mark} #{record.get('number', 0):04d} · {created} · {_summary(record)}"
         with st.expander(label):
             _render_record(record)

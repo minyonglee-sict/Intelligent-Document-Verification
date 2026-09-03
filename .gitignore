@@ -3,3 +3,18 @@ __pycache__/
 
 # 업로드 원본과 SQLite DB는 런타임 산출물이다
 data/
+
+# Figma 개인 액세스 토큰 (REST API로 디자인 가져올 때 사용, 커밋 금지)
+.figma_token
+
+# Gmail SMTP 계정 (비밀번호 재설정 메일 발송용, 커밋 금지)
+.smtp_credentials
+
+# docker-compose.yml 이 읽는 실제 값 (sa 비밀번호 등, 커밋 금지). .env.example 참고
+.env
+
+# Claude Code 세션 스크래치패드 (조사 메모 등, 코드가 아니다)
+.local/
+
+# JVM 크래시 덤프 -- 실수로 작업 디렉터리에 떨어진 산출물
+hs_err_pid*.log

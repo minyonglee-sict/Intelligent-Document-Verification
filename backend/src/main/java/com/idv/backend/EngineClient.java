@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
  * Python 검증 엔진(api.py)을 부르는 통로.
@@ -23,8 +25,9 @@ import org.springframework.web.client.RestClient;
  * 응답을 해석하지 않고 상태 코드와 본문을 그대로 넘긴다 -- 승인 거절(409)처럼
  * 엔진이 내리는 판단도 그대로 화면까지 도달해야 한다.
  *
- * <p>인증·권한·감사 로그처럼 이 계층에서 붙일 것이 생기면 {@link #forward} 앞뒤가
- * 그 자리가 된다.
+ * <p>인증은 엔진(api.py)이 Authorization: Bearer 토큰으로 직접 검사한다. 이 계층은
+ * 판단을 두 벌로 만들지 않고, 화면이 보낸 헤더를 아래 요청 인터셉터로 그대로
+ * 엔진까지 실어 나르기만 한다 -- 메서드마다 따로 손대지 않아도 되게 한 곳에 모았다.
  */
 @Component
 public class EngineClient {
@@ -42,6 +45,16 @@ public class EngineClient {
         this.client = RestClient.builder()
                 .baseUrl(baseUrl)
                 .requestFactory(factory)
+                .requestInterceptor((request, body, execution) -> {
+                    Object attrs = RequestContextHolder.getRequestAttributes();
+                    if (attrs instanceof ServletRequestAttributes servletAttrs) {
+                        String authorization = servletAttrs.getRequest().getHeader("Authorization");
+                        if (authorization != null && !authorization.isBlank()) {
+                            request.getHeaders().set("Authorization", authorization);
+                        }
+                    }
+                    return execution.execute(request, body);
+                })
                 .build();
     }
 

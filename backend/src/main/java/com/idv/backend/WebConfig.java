@@ -20,8 +20,10 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
+        // allowedOriginPatterns -- allowedOrigins()는 정확히 일치해야 해서 Cloudflare
+        // Quick Tunnel처럼 매번 바뀌는 서브도메인(*.trycloudflare.com)을 못 받는다.
         registry.addMapping("/api/**")
-                .allowedOrigins(allowedOrigins)
+                .allowedOriginPatterns(allowedOrigins)
                 .allowedMethods("GET", "POST", "DELETE", "OPTIONS")
                 .allowedHeaders("*");
     }

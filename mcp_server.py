@@ -322,16 +322,22 @@ def list_reports(scope: str = "open") -> dict[str, Any]:
 def read_report(slug: str) -> dict[str, Any]:
     """신고 한 건의 본문(report.md) 전체.
 
+    slug 는 전체 폴더명('0003_20260820-141537_doc42')과 짧은 번호('3', '#3',
+    '0003') 둘 다 받는다 -- 사람은 보통 번호로만 말한다.
+
     증상뿐 아니라 문서 행·검증 오류·저장된 품목·미저장 편집값·Docling 원문·환경이
     함께 담겨 있다. 캡처 이미지는 파일로만 있으므로 경로를 돌려준다.
     """
     try:
-        folder = config.REPORTS_DIR / slug
+        resolved = report.resolve_slug(slug)
+        if resolved is None:
+            return {"error": f"신고 {slug} 을(를) 찾을 수 없습니다."}
+        folder = config.REPORTS_DIR / resolved
         body = folder / "report.md"
         if not body.is_file():
             return {"error": f"신고 {slug} 을(를) 찾을 수 없습니다."}
         return {
-            "slug": slug,
+            "slug": resolved,
             "path": str(body),
             "images": [str(p) for p in sorted(folder.glob("screenshot_*"))],
             "report_md": body.read_text(encoding="utf-8"),
@@ -344,14 +350,20 @@ def read_report(slug: str) -> dict[str, Any]:
 def resolve_report(slug: str, reopen: bool = False) -> dict[str, Any]:
     """신고를 처리 완료로 표시한다 (reopen=True 면 다시 연다).
 
+    slug 는 전체 폴더명('0003_20260820-141537_doc42')과 짧은 번호('3', '#3',
+    '0003') 둘 다 받는다 -- 사람은 보통 번호로만 말한다.
+
     되돌릴 수 있는 유일한 쓰기 동작이라 도구로 낸다. 고친 뒤 신고를 닫는 것이
     이 서버의 주 용도다.
     """
     try:
-        status = report.STATUS_OPEN if reopen else report.STATUS_RESOLVED
-        if not report.set_status(slug, status):
+        resolved = report.resolve_slug(slug)
+        if resolved is None:
             return {"error": f"신고 {slug} 을(를) 찾을 수 없습니다."}
-        return {"slug": slug, "status": status}
+        status = report.STATUS_OPEN if reopen else report.STATUS_RESOLVED
+        if not report.set_status(resolved, status):
+            return {"error": f"신고 {slug} 을(를) 찾을 수 없습니다."}
+        return {"slug": resolved, "status": status}
     except Exception as exc:
         return _fail(exc)
 

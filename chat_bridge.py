@@ -19,6 +19,7 @@ API 의 다른 경로와 같은 방식이라, 서버를 여러 대로 늘려도 
 
 from __future__ import annotations
 
+import os
 import sys
 from contextlib import AsyncExitStack
 from typing import Any, Optional
@@ -71,7 +72,13 @@ class McpBridge:
             command=sys.executable,
             args=["mcp_server.py"],
             cwd=str(config.BASE_DIR),
-            env={"PYTHONIOENCODING": "utf-8", "MSSQL_DATABASE": config.MSSQL_DATABASE},
+            # env를 주면 부모(이 엔진 프로세스) 환경을 안 물려주고 이 값으로
+            # 통째로 갈아치운다 -- os.environ을 안 깔아두면 Docker가 넣어준
+            # MSSQL_SERVER/USER/PASSWORD가 자식(MCP 서버)에는 안 보여서, DB
+            # 접속이 config.py 기본값(localhost\\SQLEXPRESS, Windows 인증)으로
+            # 떨어진다. 컨테이너 안에선 그런 서버가 없으니 로그인 타임아웃으로
+            # 죽는다(물어보기 탭에서 도구 실행이 전부 이 에러로 실패했었다).
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "MSSQL_DATABASE": config.MSSQL_DATABASE},
         )
         stack = AsyncExitStack()
         read, write = await stack.enter_async_context(stdio_client(params))

@@ -24,7 +24,13 @@ const EXAMPLES = [
   '미처리 오류 신고 있어?',
 ]
 
-export function ChatPanel() {
+interface Props {
+  /** 채팅이 resolve_report 를 쓰면(유일하게 데이터를 바꾸는 도구) 상단 배지도
+   *  새로 고치라고 부모에 알린다. 나머지 9개 도구는 전부 읽기 전용이라 필요 없다. */
+  onChanged?: () => void
+}
+
+export function ChatPanel({ onChanged }: Props) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -56,6 +62,11 @@ export function ChatPanel() {
         ...prev,
         { role: 'assistant', content: r.answer, toolCalls: r.tool_calls, rounds: r.rounds },
       ])
+      // resolve_report 는 MCP 도구 중 유일하게 데이터를 바꾼다(신고 처리 완료·재오픈).
+      // 그것 말고는 전부 조회뿐이라, 그 도구가 쓰였을 때만 상단 배지를 새로 고친다.
+      if (r.tool_calls.some((c) => c.name === 'resolve_report')) {
+        onChanged?.()
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -113,7 +124,7 @@ export function ChatPanel() {
             {m.toolCalls && m.toolCalls.length > 0 && (
               <details className="toolcalls">
                 <summary>
-                  도구 {m.toolCalls.length}회 호출{m.rounds ? ` · ${m.rounds}바퀴` : ''}
+                  {m.toolCalls.map((c) => c.name).join(' · ')}
                 </summary>
                 {m.toolCalls.map((c, j) => (
                   <div key={j} className="toolcall">

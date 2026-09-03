@@ -11,16 +11,39 @@ import { ReportForm } from './ReportPanel'
  * 사용자가 다시 눌렀을 때만 force 로 넘긴다 -- Streamlit 검수 화면과 같은 흐름이다.
  */
 
-function Issues({ errors }: { errors: ValidationError[] }) {
+/** 오류의 field 값을 FieldEditor 가 붙여 둔 id 로 바꾼다.
+ *  'line_items[7]' -> 'field-line_items-7', 'vendor_name' -> 'field-vendor_name'.
+ *  전체 문서 오류('document', 비어 있음)는 짚을 자리가 없어 null 을 돌려준다. */
+function targetFieldId(field: string | null | undefined): string | null {
+  if (!field || field === 'document') return null
+  const m = /^line_items\[(\d+)\]$/.exec(field)
+  return m ? `field-line_items-${m[1]}` : `field-${field}`
+}
+
+function Issues({ errors, onJump }: { errors: ValidationError[]; onJump: (field: string | null | undefined) => void }) {
   return (
     <>
-      {errors.map((e, i) => (
-        <div key={i} className={`issue ${e.severity === 'warning' ? 'warning' : ''}`}>
-          {e.severity === 'warning' ? '⚠️' : '🚨'} {e.message}
-          <br />
-          <span className="field">{e.field ?? 'document'} · {e.source === 'rule' ? '규칙' : 'LLM'}</span>
-        </div>
-      ))}
+      {errors.map((e, i) => {
+        const clickable = targetFieldId(e.field) !== null
+        return (
+          <div
+            key={i}
+            className={`issue ${e.severity === 'warning' ? 'warning' : ''} ${clickable ? 'clickable' : ''}`}
+            role={clickable ? 'button' : undefined}
+            tabIndex={clickable ? 0 : undefined}
+            onClick={clickable ? () => onJump(e.field) : undefined}
+            onKeyDown={
+              clickable
+                ? (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onJump(e.field) } }
+                : undefined
+            }
+          >
+            {e.severity === 'warning' ? '⚠️' : '🚨'} {e.message}
+            <br />
+            <span className="field">{e.field ?? 'document'} · {e.source === 'rule' ? '규칙' : 'LLM'}</span>
+          </div>
+        )
+      })}
     </>
   )
 }
@@ -127,6 +150,21 @@ export function DocumentDetailPanel({ documentId, onChanged, onApproved }: Props
     setMarkdown(r.markdown)
   }
 
+  // 오류를 클릭하면 그 값을 고칠 입력칸으로 스크롤하고 포커스를 준다.
+  // 어느 칸인지는 FieldEditor 가 붙여 둔 id(targetFieldId) 로 찾는다.
+  const jumpToField = (field: string | null | undefined) => {
+    const id = targetFieldId(field)
+    const el = id ? document.getElementById(id) : null
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const input = el.matches('input, select, textarea')
+      ? (el as HTMLElement)
+      : el.querySelector<HTMLElement>('input, select, textarea')
+    input?.focus()
+    el.classList.add('field-flash')
+    window.setTimeout(() => el.classList.remove('field-flash'), 1200)
+  }
+
   return (
     <div className="panel">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
@@ -147,7 +185,7 @@ export function DocumentDetailPanel({ documentId, onChanged, onApproved }: Props
       {openErrors.length > 0 && (
         <>
           <h2>검증 오류 <span className="muted small" style={{ fontWeight: 400 }}>{openErrors.length}건</span></h2>
-          <Issues errors={openErrors} />
+          <Issues errors={openErrors} onJump={jumpToField} />
         </>
       )}
 
@@ -181,11 +219,22 @@ export function DocumentDetailPanel({ documentId, onChanged, onApproved }: Props
         <pre>{markdown ?? '불러오는 중…'}</pre>
       </details>
 
-      {/* 오류를 만난 그 자리에서 신고한다. 문서 맥락이 자동으로 붙는다. */}
+      {/* 오류를 만난 그 자리에서 신고한다. 문서 맥락이 자동으로 붙는다.
+          신고 1건이 접수되는 것도 '오류 신고' 탭 배지를 바꾸는 변화라 onChanged 로 알린다. */}
       <details className="report" style={{ marginTop: 10 }}>
         <summary>🐞 이 화면 오류 신고</summary>
         <div className="report-body">
-          <ReportForm documentId={documentId} section="검수" onCreated={() => {}} />
+          <ReportForm
+            documentId={documentId}
+            section="검수"
+            onCreated={() => {
+              onChanged()
+              // ReportForm 자기 안에도 확인 메시지가 뜨지만, <details> 안 폼 맨 위라
+              // 버튼을 누른 시점엔 이미 화면 밖일 수 있다. 재검증·승인과 같은 자리에
+              // 한 번 더 눈에 띄게 띄운다.
+              setFlash({ kind: 'ok', text: '오류 신고를 접수했습니다.' })
+            }}
+          />
         </div>
       </details>
     </div>

@@ -417,6 +417,29 @@ def open_count() -> int:
     return sum(1 for r in load_all() if r.get("status") == STATUS_OPEN)
 
 
+def resolve_slug(query: str) -> Optional[str]:
+    """'#3' 처럼 사람이 말하는 짧은 번호도 폴더 slug 로 바꿔 찾는다.
+
+    화면은 항상 목록에서 받은 정확한 slug 를 쓰지만(ReportSummary.slug), 채팅으로
+    말할 때는 사람이 번호만 말한다 -- '신고 #3 처리 완료로 바꿔줘'. slug 그대로도
+    받아 주고, 숫자만 와도 load_all() 에서 number 가 같은 신고를 찾아 준다.
+    """
+    query = (query or "").strip()
+    if not query:
+        return None
+    if (config.REPORTS_DIR / query).is_dir():
+        return query  # 이미 정확한 slug
+
+    digits = query.lstrip("#").lstrip("0") or "0"
+    if not digits.isdigit():
+        return None
+    number = int(digits)
+    for record in load_all():
+        if record.get("number") == number:
+            return record.get("slug") or record["path"].name
+    return None
+
+
 def set_status(slug: str, status: str) -> bool:
     """처리 상태를 바꾸고 report.md 도 같이 다시 쓴다."""
     folder = config.REPORTS_DIR / slug
