@@ -172,23 +172,43 @@ def map_columns(header: list[str]) -> dict[str, int]:
     return mapping
 
 
-def _merge_spilled_text(rows: list[list[str]], mapping: dict[str, int]) -> list[list[str]]:
+def _merge_spilled_text(
+    rows: list[list[str]],
+    mapping: dict[str, int],
+    header: Optional[list[str]] = None,
+) -> list[list[str]]:
     """여러 칸에 걸쳐 끊긴 품목명을 품목명 칸으로 합친다.
 
     Docling이 'Item # Ordered Service' 한 열을 'Item #' 과 'Ordered Service' 로
     쪼개면 품목명이 두 칸에 나뉜다 ('1 8-200 - Wood and Plastic' + 'Doors (9)').
     매핑에 쓰이지 않은 글자 열은 품목명의 일부로 본다. 숫자 열은 건드리지 않는다 --
     품목 번호나 값이 들어 있다.
+
+    header 를 주면(진짜 헤더 문자열이 있을 때만), 품목명 열과 이름이 완전히 같은
+    열은 합치지 않는다 -- 그건 끊겨 나온 조각이 아니라 Docling이 통째로 중복
+    출력한 열이라, 합치면 같은 글자가 두 번 붙는다('Nigrospora sphaerica ...
+    Nigrospora sphaerica ...', invoice-0-3.pdf: DESCRIPTION 열이 두 개였다).
     """
     target = mapping.get("description")
     if target is None:
         return rows
 
+    duplicate_name = ""
+    if header is not None and target < len(header):
+        duplicate_name = header[target].strip().lower()
+
     numeric, text_len = _column_shapes(rows)
     spill = [
         i
         for i in range(len(numeric))
-        if i != target and i not in mapping.values() and not numeric[i] and text_len[i] > 0
+        if i != target
+        and i not in mapping.values()
+        and not numeric[i]
+        and text_len[i] > 0
+        and not (
+            duplicate_name and header is not None and i < len(header)
+            and header[i].strip().lower() == duplicate_name
+        )
     ]
     if not spill:
         return rows
@@ -582,6 +602,35 @@ def _best_mapping(
     return best
 
 
+# 진짜 헤더를 앞부분 잡음 행 사이에서 찾을 때, 이 안쪽 줄까지만 본다. 품목
+# 표는 문서 위쪽에서 시작하므로, 너무 깊이까지 뒤지면 우연히 헤더 단서 낱말을
+# 담은 품목명("Product Description Card" 등)을 헤더로 오인할 위험이 커진다.
+_BURIED_HEADER_SEARCH_DEPTH = 4
+
+
+def _find_buried_header(
+    header: list[str], rows: list[list[str]]
+) -> tuple[list[str], list[list[str]]]:
+    """헤더 자리 행이 이 표와 무관한 앞부분(주소·담당자 등)일 때, 뒤섞여 들어온
+    진짜 헤더 행을 찾는다.
+
+    Docling은 표 사이에 빈 줄이 없으면 서로 다른 두 표를 하나로 합쳐 내놓는다
+    (주소/담당자 표 바로 뒤에 품목 표가 붙는 문서). 그러면 앞표의 헤더가 이
+    표 전체의 '첫 행'이 되어 map_columns 가 아무것도 못 찾고, 정작 뒤에 데이터로
+    묻힌 진짜 헤더('QUANTITY | DESCRIPTION | ... | TOTAL')는 시도조차 안 된다
+    (invoice-0-3.pdf: 이 때문에 품목 표 전체가 통째로 스킵되어 LLM 폴백으로
+    넘어갔고, 거기서도 페이지가 넘어간 뒤 표는 놓쳤다).
+
+    데이터로도 쓰지 않는다 -- 진짜 헤더 행이므로 헤더 자리로 옮기고 그 앞 행은
+    버린다.
+    """
+    for i, candidate in enumerate(rows[:_BURIED_HEADER_SEARCH_DEPTH]):
+        candidate_mapping = map_columns(candidate)
+        if "description" in candidate_mapping and "amount" in candidate_mapping:
+            return candidate, rows[i + 1 :]
+    return header, rows
+
+
 def parse_line_items(markdown: str) -> list[LineItem]:
     """마크다운에서 품목을 읽어낸다. 품목 표를 찾지 못하면 빈 목록."""
     items: list[LineItem] = []
@@ -590,6 +639,10 @@ def parse_line_items(markdown: str) -> list[LineItem]:
     for header, rows in _iter_tables(markdown):
         mapping = map_columns(header)
 
+        if not mapping and rows:
+            header, rows = _find_buried_header(header, rows)
+            mapping = map_columns(header)
+
         if "description" in mapping and "amount" in mapping:
             # 헤더가 읽히는 표. 다만 Docling이 헤더와 데이터를 어긋나게 복원하는
             # 경우가 있어(invoice-2-1), 이름만 믿지 않고 검산으로 확인한다.
@@ -597,7 +650,7 @@ def parse_line_items(markdown: str) -> list[LineItem]:
             # 열 배정이 확정된 뒤에 합친다. 잘못된 매핑으로 합치면 진짜 품목명 열을
             # 엉뚱한 칸에 밀어 넣어 되돌릴 수 없다.
             active = mapping
-            data_rows = _merge_spilled_text(rows, mapping)
+            data_rows = _merge_spilled_text(rows, mapping, header)
         elif "unit_price" in mapping and "amount" not in mapping and len(rows) >= 2:
             # 값을 한 번만 적는 표(합계 열 없음). 헤더가 값 열을 밝히고 있으므로
             # 주소·날짜 표를 품목으로 오인할 위험이 낮다.
@@ -605,7 +658,7 @@ def parse_line_items(markdown: str) -> list[LineItem]:
             if "description" not in mapping:
                 continue
             active = mapping
-            data_rows = _merge_spilled_text(rows, mapping)
+            data_rows = _merge_spilled_text(rows, mapping, header)
         elif active is not None and _looks_like_data(header, active) and len(header) == max(active.values()) + 1:
             # 앞 표와 같은 모양으로 이어지는 조각. 헤더 자리의 행도 데이터다.
             # 앞 조각과 똑같이 남는 글자 열(품번 등)을 합쳐야, 표가 페이지 넘어가며
